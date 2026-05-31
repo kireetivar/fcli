@@ -91,8 +91,6 @@ public class FPRProcessor {
             streamingFVDLProcessor.parse(zipFile, "audit.fvdl");
         }
 
-        //List<Vulnerability> vulnerabilities = fvdlProcessor.processXML();
-
         List<Vulnerability> vulnerabilities = streamingFVDLProcessor.getVulnerabilities();
         applyAuditIssueData(vulnerabilities);
         logger.info("Parsed {} vulnerabilities from FVDL.", vulnerabilities.size());

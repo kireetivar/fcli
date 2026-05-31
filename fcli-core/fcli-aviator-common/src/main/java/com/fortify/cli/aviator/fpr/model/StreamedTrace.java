@@ -20,7 +20,6 @@ import lombok.Data;
 
 /**
  * Streaming representation of a UnifiedTrace from FVDL.
- * Replaces JAXB UnifiedTrace for streaming parsing.
  *
  * IMPORTANT: Entry now stores full Node objects to preserve inline nodes
  * through Post-Processing (required for innerStackTrace building).

@@ -1494,9 +1494,7 @@ public class StreamingFVDLProcessor {
             }
             entry.setFields(fields);
 
-            // Note: Function and SourceLocation objects are not fully converted here
-            // If needed, create JAXB objects from the streamed data
-            // For now, the essential fields (URL and Fields) are converted
+            // Only URL and Fields are represented on the Entry model.
 
             result.add(entry);
         }

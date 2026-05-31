@@ -18,9 +18,8 @@ import lombok.Data;
 
 /**
  * Streaming representation of a Description from FVDL.
- * Replaces JAXB Description for streaming parsing.
  *
- * Structure matches JAXB Description class from Descriptions section:
+ * Structure matches the FVDL Descriptions section:
  * <Description classID="xxx">
  *   <Abstract>...</Abstract>
  *   <Explanation>...</Explanation>
@@ -48,14 +47,14 @@ public class StreamedDescription {
     private String explanation;
 
     /**
-     * Get abstract text (alias for compatibility with JAXB Description).
+     * Get abstract text.
      */
     public String getAbstract() {
         return abstractText;
     }
 
     /**
-     * Set abstract text (alias for compatibility with JAXB Description).
+     * Set abstract text.
      */
     public void setAbstract(String abstractText) {
         this.abstractText = abstractText;

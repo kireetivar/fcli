@@ -79,7 +79,6 @@ public class Node implements Searchable {
 
     // InnerStackTrace support fields (Option B - Simplified approach)
     // Used by Streaming parser to store Reason trace data for building innerStackTrace
-    // DOM parser doesn't use these (uses rawNodePool with JAXB objects instead)
     private List<String> reasonTraceRefs = new ArrayList<>(); // TraceRef IDs from Reason element
     private List<StreamedTrace> reasonInlineTraces = new ArrayList<>(); // Inline Traces from Reason element
 
@@ -167,11 +166,8 @@ public class Node implements Searchable {
     }
 
     /**
-     * Constructor for DOM parser - maintains backward compatibility.
+     * Constructor for node data without Reason trace details.
      * 22 parameters (original signature).
-     *
-     * Reason trace data is not needed as DOM parser uses rawNodePool (JAXB objects)
-     * to access Reason elements for building innerStackTrace.
      *
      * @param id Node ID
      * @param filePath Source file path
@@ -213,12 +209,11 @@ public class Node implements Searchable {
     }
 
     /**
-     * Extended constructor for Streaming parser - includes Reason trace data.
+    * Extended constructor for Streaming parser - includes Reason trace data.
      * 24 parameters (includes reasonTraceRefs and reasonInlineTraces).
      *
      * Enables innerStackTrace building from parsed Reason elements.
-     * Streaming parser must store Reason trace data in Node fields since it doesn't
-     * have JAXB objects like DOM parser.
+    * Streaming parser stores Reason trace data in Node fields so inner stack traces can be built later.
      *
      * @param id Node ID
      * @param filePath Source file path

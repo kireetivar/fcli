@@ -16,43 +16,20 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentHashMap;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.fortify.cli.aviator.fpr.Vulnerability;
-import com.fortify.cli.aviator.fpr.jaxb.Description;
 import com.fortify.cli.aviator.fpr.model.FVDLMetadata;
 import com.fortify.cli.aviator.fpr.model.ReplacementData;
 import com.fortify.cli.aviator.fpr.model.StreamedDescription;
 
 /**
- * Processor for FVDL Descriptions section. Caches descriptions by classID and processes
- * description text with replacements and conditionals, using a robust object-oriented parser.
+ * Processor for FVDL description text with replacements and conditionals.
  */
 public class DescriptionProcessor {
     private static final Logger logger = LoggerFactory.getLogger(DescriptionProcessor.class);
-    private final Map<String, Description> descriptionCache = new ConcurrentHashMap<>();
-
-    /**
-     * Processes Descriptions section and caches by classID.
-     *
-     * @param descriptions List of JAXB Description objects
-     */
-    public void process(List<Description> descriptions) {
-        if (descriptions == null) {
-            logger.debug("No Descriptions provided");
-            return;
-        }
-        for (Description desc : descriptions) {
-            if (desc.getClassID() != null) {
-                descriptionCache.put(desc.getClassID(), desc);
-            } else {
-                logger.warn("Description missing classID, skipping");
-            }
-        }
-    }
 
     /**
      * Processes description for a vulnerability, applying replacements and conditionals.
@@ -62,34 +39,8 @@ public class DescriptionProcessor {
      * @param replacementData Replacement data from AnalysisInfo
      * @return Array of [shortDescription, explanation]
      */
-    public String[] processForVuln(Vulnerability vuln, String classId, ReplacementData replacementData) {
-        Description desc = descriptionCache.get(classId);
-        if (desc == null) {
-            logger.debug("No description found for classID: {}", classId);
-            return new String[]{"", ""};
-        }
-
-        String abstractText = desc.getAbstract() != null ? desc.getAbstract() : "";
-        String explanationText = desc.getExplanation() != null ? desc.getExplanation() : "";
-
-        // Use the new parser to process the text
-        String shortDesc = FvdlParser.parseAndRender(abstractText, vuln, replacementData);
-        String explanation = FvdlParser.parseAndRender(explanationText, vuln, replacementData);
-
-        return new String[]{shortDesc, explanation};
-    }
-
-    /**
-     * Processes description for a Streaming vulnerability, applying replacements and conditionals.
-     *
-     * @param vuln            Vulnerability object
-     * @param classId         Class ID for description lookup
-     * @param replacementData Replacement data from AnalysisInfo
-     * @return Array of [shortDescription, explanation]
-     */
 
     public String[] processForVuln(Vulnerability vuln, String classId, ReplacementData replacementData, FVDLMetadata streamingFvdlData) {
-        //Description desc = descriptionCache.get(classId);
         StreamedDescription desc = streamingFvdlData.getDescriptionCache().get(classId);
         if (desc == null) {
             logger.debug("No description found for classID: {}", classId);
@@ -99,13 +50,6 @@ public class DescriptionProcessor {
         String abstractText = desc.getAbstract() != null ? desc.getAbstract() : "";
         String explanationText = desc.getExplanation() != null ? desc.getExplanation() : "";
 
-
-            /*logger.info("For classId {} ", classId);
-            logger.info("Streaming abstractText {} ", abstractText);
-            logger.info("Streaming explanationText {} ", explanationText);*/
-
-
-        // Use the new parser to process the text
         String shortDesc = FvdlParser.parseAndRender(abstractText, vuln, replacementData);
         String explanation = FvdlParser.parseAndRender(explanationText, vuln, replacementData);
 
