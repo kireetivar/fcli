@@ -20,6 +20,7 @@ import picocli.CommandLine.Command;
         name = "session",
         subcommands = {
                 AviatorUserSessionListCommand.class,
+                AviatorUserSessionDiagnoseCommand.class,
                 AviatorUserSessionLoginCommand.class,
                 AviatorUserSessionLogoutCommand.class 
         }

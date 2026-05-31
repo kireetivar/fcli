@@ -12,6 +12,7 @@
  */
 package com.fortify.cli.aviator.grpc;
 
+import java.net.URI;
 import java.util.concurrent.TimeUnit;
 
 import org.slf4j.Logger;
@@ -29,72 +30,83 @@ import io.grpc.ManagedChannelBuilder;
 public class AviatorGrpcClientHelper {
     private static final Logger LOG = LoggerFactory.getLogger(AviatorGrpcClientHelper.class);
 
+    static record AviatorGrpcTarget(String originalUrl, String host, int port, boolean explicitPort, String channelTarget) {}
+
     public static AviatorGrpcClient createClient(String url, IAviatorLogger logger, long pingIntervalSeconds) throws AviatorSimpleException {
-        if (url == null || url.trim().isEmpty()) {
-            throw new AviatorSimpleException("Aviator URL cannot be null or empty.");
-        }
-
-        String cleanUrl = url.replaceFirst("^[a-zA-Z]+://", "");
-        String[] parts = cleanUrl.split(":");
-
-        if (parts.length == 1 && !cleanUrl.isEmpty()) {
-            String target = cleanUrl;
-            if (target.contains("/")) {
-                String[] targetParts = target.split("/", 2);
-                target = targetParts[0];
-                LOG.warn("WARN: URL contained a path ('/'), using only the host part '{}' as target. Full URL: {}", target, url);
-            }
-            if (target.isEmpty()) {
-                throw new AviatorSimpleException("Aviator URL is invalid: Host part is empty after cleaning. Provided URL: " + url);
-            }
-
-            LOG.debug("No port specified or using target string, using ManagedChannelBuilder.forTarget: {}", target);
-            ManagedChannel channel = ManagedChannelBuilder.forTarget(target)
-                    .useTransportSecurity()
-                    .maxInboundMessageSize(16 * 1024 * 1024) // 16 MB
-                    .keepAliveTime(30, TimeUnit.SECONDS)
-                    .keepAliveTimeout(10, TimeUnit.SECONDS)
-                    .keepAliveWithoutCalls(true)
-                    .enableRetry()
-                    .compressorRegistry(CompressorRegistry.getDefaultInstance())
-                    .decompressorRegistry(DecompressorRegistry.getDefaultInstance())
-                    .build();
-            return new AviatorGrpcClient(channel, Constants.DEFAULT_TIMEOUT_SECONDS, logger, pingIntervalSeconds);
-
-        } else if (parts.length == 2) {
-            String host = parts[0].trim();
-            String portStr = parts[1].trim();
-
-            if (host.isEmpty()) {
-                throw new AviatorSimpleException("Aviator URL is invalid: Host cannot be empty. Provided URL: " + url);
-            }
-
-            try {
-                int port = Integer.parseInt(portStr);
-                if (port <= 0 || port > 65535) {
-                    throw new NumberFormatException("Port number out of range");
-                }
-                LOG.debug("Port specified, using ManagedChannelBuilder.forAddress: {}:{}", host, port);
-                ManagedChannel channel = ManagedChannelBuilder.forAddress(host, port)
-                        .useTransportSecurity()
-                        .maxInboundMessageSize(16 * 1024 * 1024)
-                        .keepAliveTime(30, TimeUnit.SECONDS)
-                        .keepAliveTimeout(10, TimeUnit.SECONDS)
-                        .keepAliveWithoutCalls(true)
-                        .enableRetry()
-                        .compressorRegistry(CompressorRegistry.getDefaultInstance())
-                        .decompressorRegistry(DecompressorRegistry.getDefaultInstance())
-                        .build();
-                return new AviatorGrpcClient(channel, Constants.DEFAULT_TIMEOUT_SECONDS, logger, pingIntervalSeconds);
-            } catch (NumberFormatException e) {
-                throw new AviatorSimpleException("Aviator URL is invalid: Invalid port number '" + portStr + "'. Provided URL: " + url, e);
-            }
-        } else {
-            throw new AviatorSimpleException("Aviator URL format is invalid. Expected 'host:port' or a valid target string. Provided URL: " + url);
-        }
+        ManagedChannel channel = createChannel(url);
+        return new AviatorGrpcClient(channel, Constants.DEFAULT_TIMEOUT_SECONDS, logger, pingIntervalSeconds);
     }
 
     public static AviatorGrpcClient createClient(String url) throws AviatorSimpleException {
         return createClient(url, null, Constants.DEFAULT_PING_INTERVAL_SECONDS);
+    }
+
+    static ManagedChannel createChannel(String url) {
+        return createChannel(url, null);
+    }
+
+    @SuppressWarnings("deprecation")
+    static ManagedChannel createChannel(String url, String resolvedAddress) {
+        AviatorGrpcTarget target = parseTarget(url);
+        if ( resolvedAddress != null && !resolvedAddress.isBlank() ) {
+            LOG.debug("Using ManagedChannelBuilder.forAddress with resolved address {}:{} and authority {}",
+                    resolvedAddress, target.port(), target.host());
+            return buildChannel(ManagedChannelBuilder.forAddress(resolvedAddress, target.port())
+                    .overrideAuthority(target.host()));
+        }
+        if (target.explicitPort()) {
+            LOG.debug("Port specified, using ManagedChannelBuilder.forAddress: {}:{}", target.host(), target.port());
+            return buildChannel(ManagedChannelBuilder.forAddress(target.host(), target.port()));
+        }
+
+        LOG.debug("No port specified, using ManagedChannelBuilder.forTarget: {}", target.channelTarget());
+        return buildChannel(ManagedChannelBuilder.forTarget(target.channelTarget()));
+    }
+
+    static AviatorGrpcTarget parseTarget(String url) {
+        if (url == null || url.trim().isEmpty()) {
+            throw new AviatorSimpleException("Aviator URL cannot be null or empty.");
+        }
+
+        String trimmedUrl = url.trim();
+        String urlWithScheme = trimmedUrl.matches("^[a-zA-Z][a-zA-Z0-9+.-]*://.*") ? trimmedUrl : "https://" + trimmedUrl;
+
+        try {
+            URI uri = URI.create(urlWithScheme);
+            if ( !"https".equalsIgnoreCase(uri.getScheme()) ) {
+                throw new AviatorSimpleException("Aviator URL must use the https scheme. Provided URL: " + url);
+            }
+            String host = uri.getHost();
+            if (host == null || host.isBlank()) {
+                throw new AviatorSimpleException("Aviator URL is invalid: Host cannot be empty. Provided URL: " + url);
+            }
+
+            int port = uri.getPort() == -1 ? 443 : uri.getPort();
+            if (port <= 0 || port > 65535) {
+                throw new AviatorSimpleException("Aviator URL is invalid: Invalid port number '" + port + "'. Provided URL: " + url);
+            }
+
+            if (uri.getPath() != null && !uri.getPath().isBlank() && !"/".equals(uri.getPath())) {
+                LOG.warn("WARN: URL contained path '{}', using only host/port for gRPC target. Full URL: {}", uri.getPath(), url);
+            }
+
+            boolean explicitPort = uri.getPort() != -1;
+            return new AviatorGrpcTarget(trimmedUrl, host, port, explicitPort, host);
+        } catch (IllegalArgumentException e) {
+            throw new AviatorSimpleException("Aviator URL format is invalid. Expected a valid host or host:port value. Provided URL: " + url, e);
+        }
+    }
+
+    private static ManagedChannel buildChannel(ManagedChannelBuilder<?> builder) {
+        return builder
+                .useTransportSecurity()
+                .maxInboundMessageSize(16 * 1024 * 1024)
+                .keepAliveTime(30, TimeUnit.SECONDS)
+                .keepAliveTimeout(10, TimeUnit.SECONDS)
+                .keepAliveWithoutCalls(true)
+                .enableRetry()
+                .compressorRegistry(CompressorRegistry.getDefaultInstance())
+                .decompressorRegistry(DecompressorRegistry.getDefaultInstance())
+                .build();
     }
 }

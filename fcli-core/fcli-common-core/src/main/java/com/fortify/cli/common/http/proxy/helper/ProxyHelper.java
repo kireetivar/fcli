@@ -15,7 +15,10 @@ package com.fortify.cli.common.http.proxy.helper;
 import java.net.MalformedURLException;
 import java.net.URL;
 import java.nio.file.Path;
+import java.util.Arrays;
 import java.util.Comparator;
+import java.util.Locale;
+import java.util.Optional;
 import java.util.stream.Stream;
 
 import org.apache.commons.lang3.StringUtils;
@@ -23,12 +26,17 @@ import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
 import com.fortify.cli.common.exception.FcliSimpleException;
+import com.fortify.cli.common.util.EnvHelper;
 import com.fortify.cli.common.util.FcliDataHelper;
 
 import kong.unirest.UnirestInstance;
 
 public final class ProxyHelper {
     private static final Logger LOG = LoggerFactory.getLogger(ProxyHelper.class);
+    private static final String[] HTTP_PROXY_ENV_NAMES = {"http_proxy", "HTTP_PROXY"};
+    private static final String[] HTTPS_PROXY_ENV_NAMES = {"https_proxy", "HTTPS_PROXY"};
+    private static final String[] ALL_PROXY_ENV_NAMES = {"all_proxy", "ALL_PROXY"};
+    private static final String[] NO_PROXY_ENV_NAMES = {"no_proxy", "NO_PROXY"};
     private ProxyHelper() {}
     
     public static final void configureProxy(UnirestInstance unirest, String module, String targetUrl) {
@@ -46,9 +54,7 @@ public final class ProxyHelper {
         try {
             var targetUrl = new URL(targetUrlString);
             if ( !matchesNoProxyEnv(targetUrl) ) {
-                Stream.of("http_proxy", "HTTP_PROXY", "https_proxy", "HTTPS_PROXY", "all_proxy", "ALL_PROXY")
-                .filter(e->StringUtils.isNotBlank(System.getenv(e))).findFirst()
-                .ifPresent(envVar->configureProxyFromEnvVar(unirest, envVar));
+                getProxyEnvVarName(targetUrl).ifPresent(envVar -> configureProxyFromEnvVar(unirest, envVar));
             }
         } catch (Exception e) {
             // We don't want to interfere with potential progress messages, so we
@@ -58,7 +64,7 @@ public final class ProxyHelper {
     }
 
     private static final void configureProxyFromEnvVar(UnirestInstance unirest, String envVarName) {
-        var proxyString = System.getenv(envVarName);
+        var proxyString = EnvHelper.env(envVarName);
         try {
             configureProxyFromUrlEnvVar(unirest, envVarName, new URL(proxyString));
         } catch ( MalformedURLException e ) {
@@ -94,17 +100,72 @@ public final class ProxyHelper {
     }
 
     private static final boolean matchesNoProxyEnv(URL url) {
-        var targetHost = url.getHost();
-        var env = System.getenv();
-        var noProxyEnv = env.getOrDefault("no_proxy", env.get("NO_PROXY"));
-        var noProxyHosts = noProxyEnv==null ? null : noProxyEnv.split(",");
-        return noProxyHosts==null 
-                ? false 
-                : Stream.of(noProxyHosts).anyMatch(noProxyEntry->matchesNoProxy(targetHost, noProxyEntry));
+        return matchesNoProxy(url.getHost(), getNoProxyValue().orElse(null));
     }
 
-    private static final boolean matchesNoProxy(String targetHost, String noProxyEntry) {
-        return noProxyEntry.equals("*") || targetHost.endsWith(noProxyEntry);
+    public static final Optional<String> getProxyEnvVarName(String targetUrl) {
+        try {
+            return getProxyEnvVarName(new URL(targetUrl));
+        } catch (MalformedURLException e) {
+            return Optional.empty();
+        }
+    }
+
+    public static final Optional<String> getNoProxyValue() {
+        return firstNonBlankEnvValue(NO_PROXY_ENV_NAMES);
+    }
+
+    public static final boolean matchesNoProxy(String targetHost, String noProxyValue) {
+        if ( StringUtils.isBlank(targetHost) || StringUtils.isBlank(noProxyValue) ) {
+            return false;
+        }
+        String normalizedTargetHost = targetHost.toLowerCase(Locale.ROOT);
+        return Arrays.stream(noProxyValue.split(","))
+                .map(String::trim)
+                .filter(StringUtils::isNotBlank)
+                .map(ProxyHelper::normalizeNoProxyEntry)
+                .anyMatch(entry -> matchesNoProxyEntry(normalizedTargetHost, entry));
+    }
+
+    private static boolean matchesNoProxyEntry(String normalizedTargetHost, String normalizedEntry) {
+        return "*".equals(normalizedEntry)
+                || (StringUtils.isNotBlank(normalizedEntry)
+                        && (normalizedTargetHost.equals(normalizedEntry) || normalizedTargetHost.endsWith("." + normalizedEntry)));
+    }
+
+    private static String normalizeNoProxyEntry(String noProxyEntry) {
+        String normalizedEntry = noProxyEntry.toLowerCase(Locale.ROOT);
+        if ( normalizedEntry.startsWith("*.") ) {
+            normalizedEntry = normalizedEntry.substring(2);
+        }
+        if ( normalizedEntry.startsWith(".") ) {
+            normalizedEntry = normalizedEntry.substring(1);
+        }
+        return normalizedEntry;
+    }
+
+    private static Optional<String> firstNonBlankEnvValue(String... envNames) {
+        return firstNonBlankEnvName(envNames).map(EnvHelper::env);
+    }
+
+    private static Optional<String> firstNonBlankEnvName(String... envNames) {
+        return Stream.of(envNames).filter(name -> StringUtils.isNotBlank(EnvHelper.env(name))).findFirst();
+    }
+
+    private static Optional<String> getProxyEnvVarName(URL targetUrl) {
+        return firstNonBlankEnvName(getProxyEnvNames(targetUrl));
+    }
+
+    private static String[] getProxyEnvNames(URL targetUrl) {
+        return switch ( StringUtils.defaultString(targetUrl.getProtocol()).toLowerCase(Locale.ROOT) ) {
+            case "https" -> concatEnvNames(HTTPS_PROXY_ENV_NAMES, ALL_PROXY_ENV_NAMES);
+            case "http" -> concatEnvNames(HTTP_PROXY_ENV_NAMES, ALL_PROXY_ENV_NAMES);
+            default -> ALL_PROXY_ENV_NAMES;
+        };
+    }
+
+    private static String[] concatEnvNames(String[]... envNameGroups) {
+        return Stream.of(envNameGroups).flatMap(Arrays::stream).toArray(String[]::new);
     }
 
     public static final ProxyDescriptor getProxy(String name) {
