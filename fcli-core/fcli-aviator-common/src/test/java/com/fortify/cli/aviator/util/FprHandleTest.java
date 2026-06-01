@@ -86,7 +86,7 @@ class FprHandleTest {
     }
 
     @Test
-    @DisplayName("rejects unsupported external DOCTYPE declarations")
+    @DisplayName("rejects unsupported external DOCTYPE declarations when source map is requested")
     void rejectsUnsupportedExternalDoctypeDeclarations() throws Exception {
         Path fprPath = createFpr("""
             <?xml version="1.0" encoding="UTF-8"?>
@@ -96,14 +96,35 @@ class FprHandleTest {
             </properties>
             """);
 
-        AviatorTechnicalException exception = assertThrows(AviatorTechnicalException.class, () -> new FprHandle(fprPath));
+        try (FprHandle handle = new FprHandle(fprPath)) {
+            AviatorTechnicalException exception = assertThrows(AviatorTechnicalException.class, handle::getSourceFileMap);
 
-        assertTrue(exception.getCause() instanceof IOException);
-        assertTrue(exception.getCause().getMessage().contains("unsupported DOCTYPE declaration"));
+            assertTrue(exception.getCause() instanceof IOException);
+            assertTrue(exception.getCause().getMessage().contains("unsupported DOCTYPE declaration"));
+        }
     }
 
     @Test
-    @DisplayName("rejects internal entity declarations in properties XML")
+    @DisplayName("validate rejects unsupported external DOCTYPE declarations")
+    void validateRejectsUnsupportedExternalDoctypeDeclarations() throws Exception {
+        Path fprPath = createFpr("""
+            <?xml version="1.0" encoding="UTF-8"?>
+            <!DOCTYPE properties SYSTEM "http://example.com/properties.dtd">
+            <properties>
+                <entry key="Test.java">src-archive/Test.java</entry>
+            </properties>
+            """);
+
+        try (FprHandle handle = new FprHandle(fprPath)) {
+            AviatorTechnicalException exception = assertThrows(AviatorTechnicalException.class, handle::validate);
+
+            assertTrue(exception.getCause() instanceof IOException);
+            assertTrue(exception.getCause().getMessage().contains("unsupported DOCTYPE declaration"));
+        }
+    }
+
+    @Test
+    @DisplayName("rejects internal entity declarations in properties XML when source map is requested")
     void rejectsInternalEntityDeclarations() throws Exception {
         Path fprPath = createFpr("""
             <?xml version="1.0" encoding="UTF-8"?>
@@ -115,17 +136,38 @@ class FprHandleTest {
             </properties>
             """);
 
-        AviatorTechnicalException exception = assertThrows(AviatorTechnicalException.class, () -> new FprHandle(fprPath));
+        try (FprHandle handle = new FprHandle(fprPath)) {
+            AviatorTechnicalException exception = assertThrows(AviatorTechnicalException.class, handle::getSourceFileMap);
 
-        assertTrue(exception.getCause() instanceof IOException);
-        assertTrue(exception.getCause().getMessage().contains("ENTITY declarations"));
+            assertTrue(exception.getCause() instanceof IOException);
+            assertTrue(exception.getCause().getMessage().contains("ENTITY declarations"));
+        }
+    }
+
+    @Test
+    @DisplayName("opens remediation-only FPR without requiring source archive index")
+    void opensRemediationOnlyFprWithoutRequiringSourceArchiveIndex() throws Exception {
+        Path fprPath = createFprWithoutSourceIndex();
+
+        try (FprHandle handle = new FprHandle(fprPath)) {
+            assertTrue(handle.hasRemediations());
+        }
     }
 
     private Path createFpr(String indexXml) throws IOException {
         Path fprPath = tempDir.resolve("test.fpr");
         try (ZipOutputStream zipOutputStream = new ZipOutputStream(Files.newOutputStream(fprPath))) {
+            writeEntry(zipOutputStream, "audit.fvdl", "<FVDL />");
             writeEntry(zipOutputStream, "src-archive/index.xml", indexXml);
             writeEntry(zipOutputStream, "src-archive/Test.java", "public class Test {}\n");
+        }
+        return fprPath;
+    }
+
+    private Path createFprWithoutSourceIndex() throws IOException {
+        Path fprPath = tempDir.resolve("remediation-only.fpr");
+        try (ZipOutputStream zipOutputStream = new ZipOutputStream(Files.newOutputStream(fprPath))) {
+            writeEntry(zipOutputStream, "remediations.xml", "<Remediations />");
         }
         return fprPath;
     }
