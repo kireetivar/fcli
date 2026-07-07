@@ -42,6 +42,7 @@ import picocli.CommandLine.Command;
                 //   'rest' has a different header ('Interact with' compared to most
                 //   other commands ('Manage').
                 AviatorAdminConfigCommands.class,
+                AviatorDiagnoseCommand.class,
                 AviatorUserSessionCommands.class,
                 AviatorAppCommands.class,
                 AviatorEntitlementCommands.class,
