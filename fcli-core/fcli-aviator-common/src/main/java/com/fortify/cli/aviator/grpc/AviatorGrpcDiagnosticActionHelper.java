@@ -24,12 +24,14 @@ import com.fortify.cli.aviator.grpc.AviatorGrpcDiagnosticReport.StepName;
 
 final class AviatorGrpcDiagnosticActionHelper {
     private static final String FIELD_ADDITIONAL_RECOMMENDED_ACTIONS = "additionalRecommendedActions";
+    private static final String FIELD_FAILURE_CATEGORY = "failureCategory";
     private static final String FIELD_HINT = "hint";
     private static final String FIELD_RECOMMENDED_ACTION = "recommendedAction";
     private static final String FIELD_STATUS = "status";
     private static final String FIELD_STEP = "step";
     private static final String FIELD_SUMMARY = "summary";
     private static final String FIELD_TRUSTSTORE_SOURCE = "trustStoreSource";
+    private static final String FAILURE_CATEGORY_TLS_UNTRUSTED_CERT = "tls_untrusted_cert";
     private static final String TRUSTSTORE_SOURCE_NONE = "none";
     private static final String ACTION_VERIFY_ACTIVE_TRUSTSTORE =
         "Verify the configured truststore contains the CA chain required by the Aviator gRPC endpoint";
@@ -39,7 +41,7 @@ final class AviatorGrpcDiagnosticActionHelper {
     private AviatorGrpcDiagnosticActionHelper() {}
 
     static void addTrustStoreContextIfApplicable(ObjectNode step, ObjectNode environmentStep) {
-        if ( !isFailedGrpcChannelStep(step) || !hasActiveTrustStore(environmentStep) ) {
+        if ( !isFailedGrpcChannelStep(step) || !hasActiveTrustStore(environmentStep) || hasConcreteTrustStoreRecommendation(step) ) {
             return;
         }
         if ( addAdditionalRecommendedAction(step, ACTION_VERIFY_ACTIVE_TRUSTSTORE) ) {
@@ -89,5 +91,9 @@ final class AviatorGrpcDiagnosticActionHelper {
         }
         String trustStoreSource = environmentStep.path(FIELD_TRUSTSTORE_SOURCE).asText(TRUSTSTORE_SOURCE_NONE);
         return StringUtils.isNotBlank(trustStoreSource) && !TRUSTSTORE_SOURCE_NONE.equalsIgnoreCase(trustStoreSource);
+    }
+
+    private static boolean hasConcreteTrustStoreRecommendation(ObjectNode step) {
+        return FAILURE_CATEGORY_TLS_UNTRUSTED_CERT.equals(step.path(FIELD_FAILURE_CATEGORY).asText());
     }
 }

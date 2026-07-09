@@ -21,11 +21,14 @@ import org.slf4j.LoggerFactory;
 import com.fortify.cli.aviator._common.exception.AviatorSimpleException;
 import com.fortify.cli.aviator.config.IAviatorLogger;
 import com.fortify.cli.aviator.util.Constants;
+import com.fortify.cli.common.http.ssl.trust.FcliTrustManager;
 
 import io.grpc.CompressorRegistry;
 import io.grpc.DecompressorRegistry;
 import io.grpc.ManagedChannel;
-import io.grpc.ManagedChannelBuilder;
+import io.grpc.netty.shaded.io.grpc.netty.GrpcSslContexts;
+import io.grpc.netty.shaded.io.grpc.netty.NettyChannelBuilder;
+import io.grpc.netty.shaded.io.netty.handler.ssl.SslContext;
 
 public class AviatorGrpcClientHelper {
     private static final Logger LOG = LoggerFactory.getLogger(AviatorGrpcClientHelper.class);
@@ -49,18 +52,18 @@ public class AviatorGrpcClientHelper {
     static ManagedChannel createChannel(String url, String resolvedAddress) {
         AviatorGrpcTarget target = parseTarget(url);
         if ( resolvedAddress != null && !resolvedAddress.isBlank() ) {
-            LOG.debug("Using ManagedChannelBuilder.forAddress with resolved address {}:{} and authority {}",
+            LOG.debug("Using NettyChannelBuilder.forAddress with resolved address {}:{} and authority {}",
                     resolvedAddress, target.port(), target.host());
-            return buildChannel(ManagedChannelBuilder.forAddress(resolvedAddress, target.port())
+            return buildChannel(NettyChannelBuilder.forAddress(resolvedAddress, target.port())
                     .overrideAuthority(target.host()));
         }
         if (target.explicitPort()) {
-            LOG.debug("Port specified, using ManagedChannelBuilder.forAddress: {}:{}", target.host(), target.port());
-            return buildChannel(ManagedChannelBuilder.forAddress(target.host(), target.port()));
+            LOG.debug("Port specified, using NettyChannelBuilder.forAddress: {}:{}", target.host(), target.port());
+            return buildChannel(NettyChannelBuilder.forAddress(target.host(), target.port()));
         }
 
-        LOG.debug("No port specified, using ManagedChannelBuilder.forTarget: {}", target.channelTarget());
-        return buildChannel(ManagedChannelBuilder.forTarget(target.channelTarget()));
+        LOG.debug("No port specified, using NettyChannelBuilder.forTarget: {}", target.channelTarget());
+        return buildChannel(NettyChannelBuilder.forTarget(target.channelTarget()));
     }
 
     static AviatorGrpcTarget parseTarget(String url) {
@@ -97,9 +100,9 @@ public class AviatorGrpcClientHelper {
         }
     }
 
-    private static ManagedChannel buildChannel(ManagedChannelBuilder<?> builder) {
+    private static ManagedChannel buildChannel(NettyChannelBuilder builder) {
         return builder
-                .useTransportSecurity()
+                .sslContext(createSslContext())
                 .maxInboundMessageSize(16 * 1024 * 1024)
                 .keepAliveTime(30, TimeUnit.SECONDS)
                 .keepAliveTimeout(10, TimeUnit.SECONDS)
@@ -108,6 +111,16 @@ public class AviatorGrpcClientHelper {
                 .compressorRegistry(CompressorRegistry.getDefaultInstance())
                 .decompressorRegistry(DecompressorRegistry.getDefaultInstance())
                 .build();
+    }
+
+    private static SslContext createSslContext() {
+        try {
+            return GrpcSslContexts.forClient()
+                    .trustManager(FcliTrustManager.getInstance())
+                    .build();
+        } catch (Exception e) {
+            throw new AviatorSimpleException("Unable to initialize Aviator gRPC TLS context", e);
+        }
     }
 
 }

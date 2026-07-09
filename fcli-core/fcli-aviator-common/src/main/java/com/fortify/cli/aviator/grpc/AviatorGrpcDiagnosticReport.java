@@ -104,8 +104,8 @@ public record AviatorGrpcDiagnosticReport(ArrayNode steps, boolean connectivityF
         DNS("dns", true),
         TCP("tcp", true),
         TLS_ALPN("tls-alpn", true),
-        GRPC_CHANNEL("grpc-channel", true),
-        GRPC_RESPONSE("grpc-response", true);
+        GRPC_CHANNEL("aviator-server-channel", true),
+        GRPC_RESPONSE("aviator-server-response", true);
 
         private final String text;
         private final boolean connectivityStep;

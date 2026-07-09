@@ -74,6 +74,8 @@ public final class AviatorGrpcConnectivityDiagnosticHelper {
         "Verify the Aviator gRPC service is reachable on the configured host and port";
     private static final String ACTION_VERIFY_GRPC_ROUTE =
         "Check VPN, firewall, proxy, load balancer, or CDN settings for gRPC and HTTP/2 traffic";
+    private static final String ACTION_VERIFY_GRPC_TRANSPORT_RESETS =
+        "Check the Aviator gRPC path for HTTP/2 GOAWAY or RST_STREAM resets before the channel becomes READY";
     private static final String ACTION_VERIFY_AVIATOR_ENDPOINT =
         "Verify the URL points to the Aviator gRPC endpoint and not another HTTPS or gRPC service";
     // Conservative client-side thresholds for flagging unexpectedly slow connectivity steps.
@@ -374,9 +376,10 @@ public final class AviatorGrpcConnectivityDiagnosticHelper {
             }
             return StepOutcome.failure(createGrpcChannelFailureStep(target, resolvedAddress, start, probeState));
         } catch (Exception e) {
+            String description = describeException(e);
             ObjectNode step = errorStep(target, StepName.GRPC_CHANNEL, start, e,
-                    "gRPC channel could not be established",
-                    grpcTransportFailureInfo(describeException(e), new FailureInfo("grpc_channel_error", ACTION_VERIFY_GRPC_ROUTE)));
+                    buildGrpcChannelExceptionSummary(description),
+                    grpcChannelExceptionFailureInfo(description));
             putResolvedAddress(step, resolvedAddress);
             return StepOutcome.failure(step);
         } finally {
@@ -559,6 +562,18 @@ public final class AviatorGrpcConnectivityDiagnosticHelper {
         };
     }
 
+    static String buildGrpcChannelExceptionSummary(String description) {
+        if ( isCertificateError(description) ) {
+            return "The gRPC channel could not be established because the server certificate is not trusted";
+        }
+        String transportFailureCategory = grpcTransportFailureCategory(description);
+        return switch ( transportFailureCategory ) {
+            case "grpc_goaway" -> "The gRPC channel could not be established because the upstream gRPC path sent GOAWAY before READY";
+            case "grpc_rst_stream" -> "The gRPC channel could not be established because the upstream gRPC path reset the HTTP/2 stream before READY";
+            default -> "gRPC channel could not be established";
+        };
+    }
+
     static String buildGrpcResponseSummary(TokenValidationResponse response) {
         if ( response.getValid() ) {
             return "Received a gRPC application response to the connectivity probe; the service unexpectedly accepted the empty probe token";
@@ -698,6 +713,15 @@ public final class AviatorGrpcConnectivityDiagnosticHelper {
         };
     }
 
+    static FailureInfo grpcChannelExceptionFailureInfo(String description) {
+        if ( isCertificateError(description) ) {
+            return new FailureInfo("tls_untrusted_cert", ACTION_CONFIGURE_TRUSTSTORE);
+        }
+        return grpcTransportFailureInfo(description,
+                new FailureInfo("grpc_channel_error", ACTION_VERIFY_GRPC_ROUTE),
+                ACTION_VERIFY_GRPC_TRANSPORT_RESETS);
+    }
+
     static FailureInfo grpcProbeFailureInfo(StatusRuntimeException exception, boolean certificateError) {
         if ( certificateError ) {
             return new FailureInfo("tls_untrusted_cert", ACTION_CONFIGURE_TRUSTSTORE);
@@ -718,14 +742,27 @@ public final class AviatorGrpcConnectivityDiagnosticHelper {
     }
 
     static FailureInfo grpcTransportFailureInfo(String description, FailureInfo defaultInfo) {
+        return grpcTransportFailureInfo(description, defaultInfo, ACTION_VERIFY_GRPC_ROUTE);
+    }
+
+    static FailureInfo grpcTransportFailureInfo(String description, FailureInfo defaultInfo, String transportResetAction) {
+        String transportFailureCategory = grpcTransportFailureCategory(description);
+        return switch ( transportFailureCategory ) {
+            case "grpc_goaway" -> new FailureInfo("grpc_goaway", transportResetAction);
+            case "grpc_rst_stream" -> new FailureInfo("grpc_rst_stream", transportResetAction);
+            default -> defaultInfo;
+        };
+    }
+
+    private static String grpcTransportFailureCategory(String description) {
         String normalizedDescription = lowerCaseOrEmpty(description);
         if ( normalizedDescription.contains("goaway") ) {
-            return new FailureInfo("grpc_goaway", ACTION_VERIFY_GRPC_ROUTE);
+            return "grpc_goaway";
         }
         if ( normalizedDescription.contains("rst_stream") || normalizedDescription.contains("rst stream") ) {
-            return new FailureInfo("grpc_rst_stream", ACTION_VERIFY_GRPC_ROUTE);
+            return "grpc_rst_stream";
         }
-        return defaultInfo;
+        return "";
     }
 
     private static String lowerCaseOrEmpty(String value) {

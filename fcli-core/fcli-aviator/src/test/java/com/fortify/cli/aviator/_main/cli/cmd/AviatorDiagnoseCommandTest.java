@@ -62,7 +62,7 @@ class AviatorDiagnoseCommandTest {
     void verdictKeepsPrimaryAndAdditionalActionsSeparate() {
         ArrayNode steps = JsonHelper.getObjectMapper().createArrayNode();
         ObjectNode step = steps.addObject();
-        step.put("step", "grpc-channel");
+        step.put("step", "aviator-server-channel");
         step.put("status", "FAILED");
         step.put("failureCategory", "grpc_transient_failure");
         step.put("summary", "TLS succeeded, but the gRPC channel never became READY");

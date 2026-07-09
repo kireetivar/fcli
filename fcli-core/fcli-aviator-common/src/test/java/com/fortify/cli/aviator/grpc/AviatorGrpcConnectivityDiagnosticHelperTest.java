@@ -121,6 +121,33 @@ class AviatorGrpcConnectivityDiagnosticHelperTest {
     }
 
     @Test
+    void grpcChannelExceptionClassifiesCertificateErrorsAsTruststoreFailures() {
+        var failureInfo = AviatorGrpcConnectivityDiagnosticHelper.grpcChannelExceptionFailureInfo(
+                "PKIX path building failed: unable to find valid certification path to requested target");
+
+        assertEquals("tls_untrusted_cert", failureInfo.category());
+        assertEquals("Run 'fcli config truststore set' to configure a custom truststore", failureInfo.recommendedAction());
+    }
+
+    @Test
+    void grpcChannelExceptionClassifiesGoAwayAsConcreteTransportReset() {
+        var failureInfo = AviatorGrpcConnectivityDiagnosticHelper.grpcChannelExceptionFailureInfo(
+                "Received GOAWAY with error code ENHANCE_YOUR_CALM");
+
+        assertEquals("grpc_goaway", failureInfo.category());
+        assertEquals("Check the Aviator gRPC path for HTTP/2 GOAWAY or RST_STREAM resets before the channel becomes READY",
+                failureInfo.recommendedAction());
+    }
+
+    @Test
+    void grpcChannelExceptionSummaryMentionsObservedGoAway() {
+        String summary = AviatorGrpcConnectivityDiagnosticHelper.buildGrpcChannelExceptionSummary(
+                "Received GOAWAY with error code ENHANCE_YOUR_CALM");
+
+        assertEquals("The gRPC channel could not be established because the upstream gRPC path sent GOAWAY before READY", summary);
+    }
+
+    @Test
     void grpcResponseSummaryTreatsEmptyTokenRejectionAsReachabilitySuccess() {
         String summary = AviatorGrpcConnectivityDiagnosticHelper.buildGrpcResponseSummary(
                 TokenValidationResponse.newBuilder()
@@ -144,7 +171,7 @@ class AviatorGrpcConnectivityDiagnosticHelperTest {
     @Test
     void grpcChannelFailureMentionsConfiguredTrustStoreWhenActive() {
         ObjectNode step = JsonHelper.getObjectMapper().createObjectNode();
-        step.put("step", "grpc-channel");
+        step.put("step", "aviator-server-channel");
         step.put("status", "FAILED");
         step.put("summary", "TLS succeeded, but the gRPC channel never became READY");
         step.put("recommendedAction", "Check VPN, firewall, proxy, load balancer, or CDN settings for gRPC and HTTP/2 traffic");
@@ -165,21 +192,39 @@ class AviatorGrpcConnectivityDiagnosticHelperTest {
     }
 
     @Test
+    void grpcChannelTrustStoreContextIsNotAddedWhenPrimaryRecommendationIsAlreadyTruststore() {
+        ObjectNode step = JsonHelper.getObjectMapper().createObjectNode();
+        step.put("step", "aviator-server-channel");
+        step.put("status", "FAILED");
+        step.put("summary", "The gRPC channel could not be established because the server certificate is not trusted");
+        step.put("failureCategory", "tls_untrusted_cert");
+        step.put("recommendedAction", "Run 'fcli config truststore set' to configure a custom truststore");
+        ObjectNode environmentStep = JsonHelper.getObjectMapper().createObjectNode();
+        environmentStep.put("trustStoreSource", "config");
+
+        AviatorGrpcDiagnosticActionHelper.addTrustStoreContextIfApplicable(step, environmentStep);
+
+        assertFalse(step.has("additionalRecommendedActions"));
+        assertEquals("The gRPC channel could not be established because the server certificate is not trusted",
+                step.path("summary").asText());
+    }
+
+    @Test
     void connectivityStepsMatchDefaultProbePipeline() {
-        assertTrue(AviatorGrpcConnectivityDiagnosticHelper.isConnectivityStep("grpc-channel"));
-        assertTrue(AviatorGrpcConnectivityDiagnosticHelper.isConnectivityStep("grpc-response"));
+        assertTrue(AviatorGrpcConnectivityDiagnosticHelper.isConnectivityStep("aviator-server-channel"));
+        assertTrue(AviatorGrpcConnectivityDiagnosticHelper.isConnectivityStep("aviator-server-response"));
         assertFalse(AviatorGrpcConnectivityDiagnosticHelper.isConnectivityStep("address-probes"));
     }
 
     @Test
     void requiredTransportFailuresCountAsConnectivityFailures() {
         ObjectNode grpcResponseFailureStep = JsonHelper.getObjectMapper().createObjectNode();
-        grpcResponseFailureStep.put("step", "grpc-response");
+        grpcResponseFailureStep.put("step", "aviator-server-response");
         grpcResponseFailureStep.put("status", "FAILED");
         grpcResponseFailureStep.put("failureCategory", "grpc_deadline_exceeded");
 
         ObjectNode grpcResponseWarningStep = JsonHelper.getObjectMapper().createObjectNode();
-        grpcResponseWarningStep.put("step", "grpc-response");
+        grpcResponseWarningStep.put("step", "aviator-server-response");
         grpcResponseWarningStep.put("status", "WARN");
         grpcResponseWarningStep.put("failureCategory", "grpc_method_unimplemented");
 
@@ -197,11 +242,12 @@ class AviatorGrpcConnectivityDiagnosticHelperTest {
 
     @Test
     void runWithTimeoutDoesNotPoisonLaterInvocations() throws Exception {
+        Duration firstTimeout = Duration.ofMillis(250);
         CountDownLatch started = new CountDownLatch(1);
         CountDownLatch blocker = new CountDownLatch(1);
 
         assertThrows(TimeoutException.class,
-                () -> AviatorGrpcConnectivityDiagnosticHelper.runWithTimeout(Duration.ofMillis(10), () -> {
+                () -> AviatorGrpcConnectivityDiagnosticHelper.runWithTimeout(firstTimeout, () -> {
                     started.countDown();
                     while ( true ) {
                         try {
