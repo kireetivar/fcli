@@ -16,11 +16,72 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
+import java.util.Map;
+import java.util.Optional;
+import java.util.Set;
+
 import org.junit.jupiter.api.Test;
 
-import com.fortify.cli.common.util.EnvHelper;
-
 class ProxyHelperTest {
+    @Test
+    void shouldPreferHttpsProxyForHttpsTargets() {
+        var env = Map.of(
+            "http_proxy", "http://http-proxy.local:8080",
+            "https_proxy", "https://https-proxy.local:8443"
+        );
+
+        Optional<String> selected = ProxyHelper.getProxyEnvVarName("https", env);
+
+        assertEquals(Optional.of("https_proxy"), selected);
+    }
+
+    @Test
+    void shouldPreferHttpProxyForHttpTargets() {
+        var env = Map.of(
+            "http_proxy", "http://http-proxy.local:8080",
+            "https_proxy", "https://https-proxy.local:8443"
+        );
+
+        Optional<String> selected = ProxyHelper.getProxyEnvVarName("http", env);
+
+        assertEquals(Optional.of("http_proxy"), selected);
+    }
+
+    @Test
+    void shouldParseProxyFromEnvForSchemeLessTarget() {
+        var env = Map.of("https_proxy", "https://user:pwd@proxy.example.com:8443");
+
+        var proxyDescriptor = ProxyHelper.getProxyDescriptorFromEnvVars("aviator.example.com:443", env);
+
+        assertTrue(proxyDescriptor.isPresent());
+        assertEquals("proxy.example.com", proxyDescriptor.get().getProxyHost());
+        assertEquals(8443, proxyDescriptor.get().getProxyPort());
+        assertEquals("user", proxyDescriptor.get().getProxyUser());
+        assertEquals("pwd", proxyDescriptor.get().getProxyPasswordAsString());
+    }
+
+    @Test
+    void shouldRespectNoProxyEnv() {
+        var env = Map.of(
+            "https_proxy", "https://proxy.example.com:8443",
+            "NO_PROXY", "aviator.example.com"
+        );
+
+        var proxyDescriptor = ProxyHelper.getProxyDescriptorFromEnvVars("aviator.example.com:443", env);
+
+        assertFalse(proxyDescriptor.isPresent());
+    }
+
+    @Test
+    void proxyDescriptorShouldMatchSchemeLessUrls() {
+        var descriptor = ProxyDescriptor.builder()
+            .targetHostNames(Set.of("aviator.example.com"))
+            .targetHostNamesMatchMode(ProxyDescriptor.ProxyMatchMode.include)
+            .build();
+
+        assertTrue(descriptor.matches("aviator", "aviator.example.com:443"));
+    }
+
     @Test
     void matchesNoProxyRequiresDomainBoundary() {
         assertTrue(ProxyHelper.matchesNoProxy("example.com", "example.com"));
@@ -37,61 +98,14 @@ class ProxyHelperTest {
     }
 
     @Test
-    void getNoProxyValueHonorsLowercaseOverridePrecedence() {
-        String lowerCaseProperty = EnvHelper.envSystemPropertyName("no_proxy");
-        String upperCaseProperty = EnvHelper.envSystemPropertyName("NO_PROXY");
-        String previousLowerCaseValue = System.getProperty(lowerCaseProperty);
-        String previousUpperCaseValue = System.getProperty(upperCaseProperty);
-        try {
-            System.setProperty(upperCaseProperty, "example.com");
-            System.setProperty(lowerCaseProperty, "internal.example.com");
+    void shouldPreferLowerCaseNoProxyEntryWhenBothCasesArePresent() {
+        var env = Map.of(
+            "no_proxy", "internal.example.com",
+            "NO_PROXY", "example.com",
+            "https_proxy", "https://proxy.example.com:8443"
+        );
 
-            assertEquals("internal.example.com", ProxyHelper.getNoProxyValue().orElse(null));
-        } finally {
-            restoreProperty(lowerCaseProperty, previousLowerCaseValue);
-            restoreProperty(upperCaseProperty, previousUpperCaseValue);
-        }
-    }
-
-    @Test
-    void getProxyEnvVarNamePrefersHttpsProxyForHttpsTargets() {
-        String httpProxyProperty = EnvHelper.envSystemPropertyName("HTTP_PROXY");
-        String httpsProxyProperty = EnvHelper.envSystemPropertyName("HTTPS_PROXY");
-        String previousHttpProxyValue = System.getProperty(httpProxyProperty);
-        String previousHttpsProxyValue = System.getProperty(httpsProxyProperty);
-        try {
-            System.setProperty(httpProxyProperty, "http://proxy.example.com:8080");
-            System.setProperty(httpsProxyProperty, "https://secure-proxy.example.com:8443");
-
-            assertEquals("HTTPS_PROXY", ProxyHelper.getProxyEnvVarName("https://aviator.example.com").orElse(null));
-        } finally {
-            restoreProperty(httpProxyProperty, previousHttpProxyValue);
-            restoreProperty(httpsProxyProperty, previousHttpsProxyValue);
-        }
-    }
-
-    @Test
-    void getProxyEnvVarNamePrefersHttpProxyForHttpTargets() {
-        String httpProxyProperty = EnvHelper.envSystemPropertyName("HTTP_PROXY");
-        String httpsProxyProperty = EnvHelper.envSystemPropertyName("HTTPS_PROXY");
-        String previousHttpProxyValue = System.getProperty(httpProxyProperty);
-        String previousHttpsProxyValue = System.getProperty(httpsProxyProperty);
-        try {
-            System.setProperty(httpProxyProperty, "http://proxy.example.com:8080");
-            System.setProperty(httpsProxyProperty, "https://secure-proxy.example.com:8443");
-
-            assertEquals("HTTP_PROXY", ProxyHelper.getProxyEnvVarName("http://ssc.example.com").orElse(null));
-        } finally {
-            restoreProperty(httpProxyProperty, previousHttpProxyValue);
-            restoreProperty(httpsProxyProperty, previousHttpsProxyValue);
-        }
-    }
-
-    private static void restoreProperty(String propertyName, String value) {
-        if ( value == null ) {
-            System.clearProperty(propertyName);
-        } else {
-            System.setProperty(propertyName, value);
-        }
+        assertTrue(ProxyHelper.getProxyDescriptorFromEnvVars("internal.example.com:443", env).isEmpty());
+        assertFalse(ProxyHelper.getProxyDescriptorFromEnvVars("api.example.com:443", env).isEmpty());
     }
 }
