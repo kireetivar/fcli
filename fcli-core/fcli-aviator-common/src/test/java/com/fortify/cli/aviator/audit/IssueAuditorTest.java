@@ -22,9 +22,11 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.Collection;
 import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -39,8 +41,10 @@ import com.fortify.cli.aviator.fpr.Vulnerability;
 import com.fortify.cli.aviator.fpr.filter.Filter;
 import com.fortify.cli.aviator.fpr.filter.FilterSet;
 import com.fortify.cli.aviator.fpr.filter.FilterTemplate;
+import com.fortify.cli.aviator.fpr.model.AuditIssue;
 import com.fortify.cli.aviator.fpr.model.FPRInfo;
 import com.fortify.cli.aviator.fpr.model.FVDLMetadata;
+import com.fortify.cli.aviator.util.Constants;
 import com.fortify.cli.aviator.util.FprHandle;
 
 
@@ -178,5 +182,44 @@ class IssueAuditorTest {
         assertEquals(1, remainingIds.size(), "Should verify that exactly one issue remains");
         assertTrue(remainingIds.contains("TARGET_ISSUE"),
             "Regression Failed: IssueAuditor hid the target issue. It likely used the Modern parser on a Legacy query string.");
+    }
+
+    @Test
+    void testBothProcessedAviatorStatusesAreSkipped() throws Exception {
+        for (String status : List.of(Constants.PROCESSED_BY_AVIATOR, Constants.PROCESSED_BY_AVIATOR_WITH_REMEDIATION)) {
+            FPRInfo fprInfo = new FPRInfo(fprHandle);
+            FilterTemplate filterTemplate = new FilterTemplate();
+            filterTemplate.setTagDefinitions(new ArrayList<>());
+            fprInfo.setFilterTemplate(filterTemplate);
+
+            String issueId = "PROCESSED_ISSUE_" + status;
+            Vulnerability vulnerability = new Vulnerability();
+            vulnerability.setInstanceID(issueId);
+
+            IssueAuditor auditor = new IssueAuditor(
+                List.of(vulnerability), null,
+                Map.of(issueId, AuditIssue.builder()
+                    .instanceId(issueId)
+                    .tags(Map.of(Constants.AVIATOR_STATUS_TAG_ID, status))
+                    .build()),
+                fprInfo, "TestApp", "1.0", new FilterSelection(null, null), noOpLogger(), null,
+                new SourceLanguageResolver(new FVDLMetadata()));
+
+            Method prepareMethod = IssueAuditor.class.getDeclaredMethod("prepareAndFilterPrompts");
+            prepareMethod.setAccessible(true);
+
+            @SuppressWarnings("unchecked")
+            Collection<?> prompts = (Collection<?>) prepareMethod.invoke(auditor);
+            assertTrue(prompts.isEmpty(), "Processed status should exclude issue: " + status);
+        }
+    }
+
+    private IAviatorLogger noOpLogger() {
+        return new IAviatorLogger() {
+            @Override public void progress(String format, Object... args) {}
+            @Override public void info(String format, Object... args) {}
+            @Override public void warn(String format, Object... args) {}
+            @Override public void error(String format, Object... args) {}
+        };
     }
 }

@@ -293,10 +293,7 @@ public class AuditProcessor {
                 }
                 // Local retain set for this save only — instance IDs successfully written here.
                 writtenInstanceIds.add(instanceId);
-                if (commentTimestamp != null &&
-                        response.getAuditResult().getAutoremediation() != null &&
-                        response.getAuditResult().getAutoremediation().getChanges() != null &&
-                        !response.getAuditResult().getAutoremediation().getChanges().isEmpty()) {
+                if (commentTimestamp != null && hasAutoremediationChanges(response)) {
                     remediationCommentTimestamps.put(instanceId, commentTimestamp);
                 }
             } else {
@@ -353,7 +350,7 @@ public class AuditProcessor {
                     tagMappingConfig, issueCategoryLookup);
         }
 
-        updateOrAddTag(issueElement, Constants.AVIATOR_STATUS_TAG_ID, Constants.PROCESSED_BY_AVIATOR);
+        updateOrAddTag(issueElement, Constants.AVIATOR_STATUS_TAG_ID, resolveAviatorStatusValue(response));
 
         if (response.getAuditResult() != null) {
             commentTimestamp = updateOrAddComment(issueElement, response.getAuditResult().comment);
@@ -362,6 +359,20 @@ public class AuditProcessor {
         updateClientAuditTrail(issueElement, response, tagMappingConfig, suppressedHistoryValue);
 
         return commentTimestamp;
+    }
+
+    private String resolveAviatorStatusValue(AuditResponse response) {
+        if (hasAutoremediationChanges(response)) {
+            return Constants.PROCESSED_BY_AVIATOR_WITH_REMEDIATION;
+        }
+        return Constants.PROCESSED_BY_AVIATOR;
+    }
+
+    private boolean hasAutoremediationChanges(AuditResponse response) {
+        return response != null && response.getAuditResult() != null
+                && response.getAuditResult().getAutoremediation() != null
+                && response.getAuditResult().getAutoremediation().getChanges() != null
+                && !response.getAuditResult().getAutoremediation().getChanges().isEmpty();
     }
 
 
@@ -398,7 +409,7 @@ public class AuditProcessor {
                 addTagHistory(clientAuditTrail, Constants.SUPPRESSED_TAG_ID, suppressedHistoryValue.toString());
             }
         }
-        addTagHistory(clientAuditTrail, Constants.AVIATOR_STATUS_TAG_ID, Constants.PROCESSED_BY_AVIATOR);
+        addTagHistory(clientAuditTrail, Constants.AVIATOR_STATUS_TAG_ID, resolveAviatorStatusValue(response));
     }
 
     private Boolean applySuppressionDecision(Element issueElement, String instanceId, TagMappingConfig.Result resultConfig,
@@ -574,7 +585,7 @@ public class AuditProcessor {
             suppressedHistoryValue = applySuppressionDecision(newIssue, instanceId, resultConfig, tagMappingConfig, issueCategoryLookup);
         }
 
-        updateOrAddTag(newIssue, Constants.AVIATOR_STATUS_TAG_ID, Constants.PROCESSED_BY_AVIATOR);
+        updateOrAddTag(newIssue, Constants.AVIATOR_STATUS_TAG_ID, resolveAviatorStatusValue(response));
 
         if (response != null && response.getAuditResult() != null) {
             commentTimestamp = updateOrAddComment(newIssue, response.getAuditResult().comment);
@@ -720,11 +731,7 @@ public class AuditProcessor {
         AuditXmlIssuePruner.retainOnly(auditDoc, updateResult.writtenInstanceIds);
 
         // Step 3: Check if there are any remediations to generate.
-        boolean hasRemediations = auditResponses.values().stream()
-                .anyMatch(ar -> ar.getAuditResult() != null &&
-                        ar.getAuditResult().getAutoremediation() != null &&
-                        ar.getAuditResult().getAutoremediation().getChanges() != null &&
-                        !ar.getAuditResult().getAutoremediation().getChanges().isEmpty());
+        boolean hasRemediations = auditResponses.values().stream().anyMatch(this::hasAutoremediationChanges);
 
         // Step 4: Generate the in-memory remediations.xml document if needed.
         if (hasRemediations && !remediationCommentTimestamps.isEmpty()) {
@@ -800,10 +807,7 @@ public class AuditProcessor {
                 String instanceId = entry.getKey();
                 AuditResponse auditResponse = entry.getValue();
 
-                if (auditResponse.getAuditResult() != null &&
-                        auditResponse.getAuditResult().getAutoremediation() != null &&
-                        auditResponse.getAuditResult().getAutoremediation().getChanges() != null &&
-                        !auditResponse.getAuditResult().getAutoremediation().getChanges().isEmpty() &&
+                if (hasAutoremediationChanges(auditResponse) &&
                         remediationCommentTimestamps.containsKey(instanceId)) {
 
                     Element remediationElement = finalDoc.createElementNS(REMEDIATIONS_NAMESPACE_URI, "Remediation");

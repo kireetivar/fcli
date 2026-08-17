@@ -18,7 +18,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
 import java.util.ArrayList;
-import java.util.Arrays;
 import java.util.List;
 import java.util.Optional;
 import java.util.stream.Collectors;
@@ -130,18 +129,30 @@ public class FilterTemplateParser {
         NodeList tagDefNodes = rootElement.getElementsByTagNameNS(namespaceURI != null ? namespaceURI : "", "TagDefinition");
         Node lastTagDefNode = tagDefNodes.getLength() > 0 ? tagDefNodes.item(tagDefNodes.getLength() - 1) : null;
 
-        boolean needsUpdate = ensureTagDefinitionPresent(filterTemplate, Constants.AVIATOR_PREDICTION_TAG_ID, "Aviator prediction", Arrays.asList(Constants.AVIATOR_NOT_AN_ISSUE, Constants.AVIATOR_REMEDIATION_REQUIRED, Constants.AVIATOR_UNSURE, Constants.AVIATOR_EXCLUDED, Constants.AVIATOR_LIKELY_TP, Constants.AVIATOR_LIKELY_FP), doc, namespaceURI, lastTagDefNode);
-        needsUpdate |= ensureTagDefinitionPresent(filterTemplate, Constants.AVIATOR_STATUS_TAG_ID, "Aviator status", Arrays.asList(Constants.PROCESSED_BY_AVIATOR), doc, namespaceURI, lastTagDefNode);
-        needsUpdate |= ensureTagDefinitionPresent(filterTemplate, Constants.FOD_TAG_ID, "FoD", Arrays.asList(Constants.PENDING_REVIEW, Constants.FALSE_POSITIVE, Constants.EXPLOITABLE, Constants.SUSPICIOUS, Constants.SANITIZED), doc, namespaceURI, lastTagDefNode);
-        needsUpdate |= ensureTagDefinitionPresent(filterTemplate, Constants.AUDITOR_STATUS_TAG_ID, "Auditor Status", Arrays.asList(Constants.PENDING_REVIEW, Constants.NOT_AN_ISSUE, Constants.UNSURE, Constants.REMEDIATION_REQUIRED, Constants.PROPOSED_NOT_AN_ISSUE, Constants.SUSPICIOUS), doc, namespaceURI, lastTagDefNode);
+        boolean needsUpdate = ensureTagDefinitionPresent(filterTemplate, Constants.AVIATOR_PREDICTION_TAG_ID,
+            "Aviator prediction", List.of(Constants.AVIATOR_NOT_AN_ISSUE, Constants.AVIATOR_REMEDIATION_REQUIRED,
+                Constants.AVIATOR_UNSURE, Constants.AVIATOR_EXCLUDED, Constants.AVIATOR_LIKELY_TP,
+                Constants.AVIATOR_LIKELY_FP), doc, namespaceURI, lastTagDefNode);
+        needsUpdate |= ensureTagDefinitionPresent(filterTemplate, Constants.AVIATOR_STATUS_TAG_ID,
+            "Aviator status", List.of(Constants.PROCESSED_BY_AVIATOR, Constants.PROCESSED_BY_AVIATOR_WITH_REMEDIATION),
+            doc, namespaceURI, lastTagDefNode);
+        needsUpdate |= ensureTagDefinitionPresent(filterTemplate, Constants.FOD_TAG_ID, "FoD",
+            List.of(Constants.PENDING_REVIEW, Constants.FALSE_POSITIVE, Constants.EXPLOITABLE,
+                Constants.SUSPICIOUS, Constants.SANITIZED), doc, namespaceURI, lastTagDefNode);
+        needsUpdate |= ensureTagDefinitionPresent(filterTemplate, Constants.AUDITOR_STATUS_TAG_ID, "Auditor Status",
+            List.of(Constants.PENDING_REVIEW, Constants.NOT_AN_ISSUE, Constants.UNSURE, Constants.REMEDIATION_REQUIRED,
+                Constants.PROPOSED_NOT_AN_ISSUE, Constants.SUSPICIOUS), doc, namespaceURI, lastTagDefNode);
 
         return needsUpdate;
     }
 
-    private boolean ensureTagDefinitionPresent(FilterTemplate filterTemplate, String tagId, String tagName, List<String> tagValues, Document doc, String namespaceURI, Node insertAfterNode) {
+    private boolean ensureTagDefinitionPresent(FilterTemplate filterTemplate, String tagId, String tagName,
+            List<String> tagValues, Document doc, String namespaceURI, Node insertAfterNode) {
         Optional<TagDefinition> existingTag = filterTemplate.getTagDefinitions().stream().filter(t -> tagId.equalsIgnoreCase(t.getId())).findFirst();
 
-        if (!existingTag.isPresent()) {
+        if (existingTag.isPresent()) {
+            return ensureTagValuesPresent(existingTag.get(), tagValues, doc, namespaceURI);
+        } else {
             TagDefinition newTagDef = createTagDefinition(tagId, tagName, tagValues);
             filterTemplate.getTagDefinitions().add(newTagDef);
 
@@ -175,7 +186,73 @@ public class FilterTemplateParser {
             }
             return true;
         }
+    }
+
+    private boolean ensureTagValuesPresent(TagDefinition tagDefinition, List<String> requiredValues,
+            Document doc, String namespaceURI) {
+        Element tagDefinitionElement = findTagDefinitionElement(doc, tagDefinition.getId(), namespaceURI);
+        if (tagDefinitionElement == null) {
+            return false;
+        }
+
+        List<TagValue> existingValues = tagDefinition.getValues();
+        if (existingValues == null) {
+            existingValues = new ArrayList<>();
+            tagDefinition.setValues(existingValues);
+        }
+
+        boolean needsUpdate = false;
+        for (String requiredValue : requiredValues) {
+            boolean valuePresent = existingValues.stream()
+                    .anyMatch(existingValue -> requiredValue.equals(existingValue.getValue()));
+            if (valuePresent) {
+                continue;
+            }
+
+            String valueId = nextAvailableValueId(existingValues);
+            TagValue tagValue = new TagValue();
+            tagValue.setId(valueId);
+            tagValue.setHidden(false);
+            tagValue.setValue(requiredValue);
+            existingValues.add(tagValue);
+
+            Element valueElement = doc.createElementNS(namespaceURI, "value");
+            valueElement.setAttribute("id", valueId);
+            valueElement.setAttribute("hidden", "false");
+            valueElement.setTextContent(requiredValue);
+            tagDefinitionElement.appendChild(valueElement);
+            needsUpdate = true;
+        }
+        return needsUpdate;
+    }
+
+    private String nextAvailableValueId(List<TagValue> existingValues) {
+        int nextValueId = existingValues.size();
+        while (containsValueId(existingValues, String.valueOf(nextValueId))) {
+            nextValueId++;
+        }
+        return String.valueOf(nextValueId);
+    }
+
+    private boolean containsValueId(List<TagValue> existingValues, String valueId) {
+        for (TagValue existingValue : existingValues) {
+            if (valueId.equals(existingValue.getId())) {
+                return true;
+            }
+        }
         return false;
+    }
+
+    private Element findTagDefinitionElement(Document doc, String tagId, String namespaceURI) {
+        NodeList tagDefinitionNodes = doc.getDocumentElement()
+                .getElementsByTagNameNS(namespaceURI != null ? namespaceURI : "", "TagDefinition");
+        for (int index = 0; index < tagDefinitionNodes.getLength(); index++) {
+            Element tagDefinitionElement = (Element) tagDefinitionNodes.item(index);
+            if (tagId.equalsIgnoreCase(tagDefinitionElement.getAttribute("id"))) {
+                return tagDefinitionElement;
+            }
+        }
+        return null;
     }
 
     private TagDefinition createTagDefinition(String id, String name, List<String> values) {

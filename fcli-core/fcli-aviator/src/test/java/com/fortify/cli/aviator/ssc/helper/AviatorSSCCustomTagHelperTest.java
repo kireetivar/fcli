@@ -168,8 +168,9 @@ class AviatorSSCCustomTagHelperTest {
             assertEquals("FB7B0462-2C2E-46D9-811A-DCC1F3C83051", tag.getGuid());
             assertEquals("Aviator status", tag.getName());
             assertEquals("LIST", tag.getValueType());
-            assertEquals(1, tag.getValues().size());
+            assertEquals(2, tag.getValues().size());
             assertTrue(tag.getValues().contains("PROCESSED_BY_AVIATOR"));
+            assertTrue(tag.getValues().contains("PROCESSED_BY_AVIATOR_WITH_REMEDIATION"));
         }
 
         @Test
@@ -203,7 +204,8 @@ class AviatorSSCCustomTagHelperTest {
                     assertNotNull(syncResult);
                     assertNotNull(syncResult.getTag());
                     assertEquals(tagId, syncResult.getTag().get("id").asText());
-                    assertEquals(1, syncResult.getTag().withArray("valueList").size());
+                    assertEquals(AviatorSSCTagDefs.AVIATOR_STATUS_TAG.getValues().size(),
+                        syncResult.getTag().withArray("valueList").size());
                     assertEquals(1, server.getCustomTagsGetCount());
                     assertEquals(1, server.getCustomTagDetailsGetCount());
                     assertEquals(0, server.getCustomTagCreateCount());

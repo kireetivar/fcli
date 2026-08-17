@@ -39,6 +39,8 @@ import org.w3c.dom.NodeList;
 
 import com.fortify.cli.aviator.audit.model.AuditResponse;
 import com.fortify.cli.aviator.audit.model.AuditResult;
+import com.fortify.cli.aviator.audit.model.Autoremediation;
+import com.fortify.cli.aviator.audit.model.Change;
 import com.fortify.cli.aviator.config.TagMappingConfig;
 import com.fortify.cli.aviator.fpr.model.FPRInfo;
 import com.fortify.cli.aviator.util.Constants;
@@ -51,6 +53,7 @@ import com.fortify.cli.aviator.util.FprHandle;
  */
 class AuditProcessorAuditIsolationTest {
     private static final String AUDIT_NS = "xmlns://www.fortify.com/schema/audit";
+    private static final String REMEDIATIONS_NS = "xmlns://www.fortify.com/schema/remediations";
 
     private Path tempFprFile;
     private FprHandle fprHandle;
@@ -87,6 +90,29 @@ class AuditProcessorAuditIsolationTest {
                 || readTagValues(audited).contains(Constants.AVIATOR_NOT_AN_ISSUE));
         assertTrue(readComments(audited).stream().anyMatch(c -> c.contains("Reviewed by Aviator")));
         assertTrue(hasTagHistory(audited));
+    }
+
+    @Test
+    void testMarksExistingAndNewIssuesWithRemediationStatus() throws Exception {
+        createTestFpr(multiIssueAuditXml("instance-existing"));
+        AuditProcessor auditProcessor = new AuditProcessor(fprHandle);
+        auditProcessor.processAuditXML();
+
+        auditProcessor.updateAndSaveAuditAndRemediationsXml(
+                Map.of(
+                        "instance-existing", successResponseWithRemediation("instance-existing"),
+                        "instance-new", successResponseWithRemediation("instance-new")),
+                createTagMappingConfig(),
+                Map.of(
+                        "instance-existing", "SQL Injection",
+                        "instance-new", "Path Manipulation"),
+                new FPRInfo(fprHandle));
+
+        assertTrue(readTagValues(readIssueElement("instance-existing"))
+                .contains(Constants.PROCESSED_BY_AVIATOR_WITH_REMEDIATION));
+        assertTrue(readTagValues(readIssueElement("instance-new"))
+                .contains(Constants.PROCESSED_BY_AVIATOR_WITH_REMEDIATION));
+        assertEquals(Set.of("instance-existing", "instance-new"), readRemediationInstanceIds());
     }
 
     @Test
@@ -220,8 +246,14 @@ class AuditProcessorAuditIsolationTest {
             zipOutputStream.closeEntry();
 
             zipOutputStream.putNextEntry(new ZipEntry("src-archive/index.xml"));
-            zipOutputStream.write("<?xml version=\"1.0\" encoding=\"UTF-8\"?><index/>".getBytes(StandardCharsets.UTF_8));
+                zipOutputStream.write(("<?xml version=\"1.0\" encoding=\"UTF-8\"?><index>"
+                    + "<entry key=\"Example.java\">src-archive/Example.java</entry></index>")
+                    .getBytes(StandardCharsets.UTF_8));
             zipOutputStream.closeEntry();
+
+                zipOutputStream.putNextEntry(new ZipEntry("src-archive/Example.java"));
+                zipOutputStream.write("original();\n".getBytes(StandardCharsets.UTF_8));
+                zipOutputStream.closeEntry();
         }
         fprHandle = new FprHandle(tempFprFile);
     }
@@ -231,6 +263,20 @@ class AuditProcessorAuditIsolationTest {
         factory.setNamespaceAware(true);
         try (var inputStream = Files.newInputStream(fprHandle.getPath("/audit.xml"))) {
             return factory.newDocumentBuilder().parse(inputStream);
+        }
+    }
+
+    private Set<String> readRemediationInstanceIds() throws Exception {
+        DocumentBuilderFactory factory = DocumentBuilderFactory.newInstance();
+        factory.setNamespaceAware(true);
+        try (var inputStream = Files.newInputStream(fprHandle.getPath("/remediations.xml"))) {
+            Document document = factory.newDocumentBuilder().parse(inputStream);
+            NodeList nodes = document.getElementsByTagNameNS(REMEDIATIONS_NS, "Remediation");
+            Set<String> ids = new HashSet<>();
+            for (int i = 0; i < nodes.getLength(); i++) {
+                ids.add(((Element) nodes.item(i)).getAttribute("instanceId"));
+            }
+            return ids;
         }
     }
 
@@ -290,6 +336,26 @@ class AuditProcessorAuditIsolationTest {
                 .auditResult(AuditResult.builder()
                         .tagValue(Constants.NOT_AN_ISSUE)
                         .comment("Reviewed by Aviator")
+                        .build())
+                .build();
+    }
+
+    private AuditResponse successResponseWithRemediation(String instanceId) {
+        return AuditResponse.builder()
+                .issueId(instanceId)
+                .status("SUCCESS")
+                .tier("GOLD")
+                .auditResult(AuditResult.builder()
+                        .tagValue(Constants.NOT_AN_ISSUE)
+                        .comment("Reviewed by Aviator")
+                        .autoremediation(Autoremediation.builder()
+                                .changes(List.of(Change.builder()
+                                        .file("Example.java")
+                                        .fromLine("1")
+                                        .toLine("1")
+                                        .replaceWith("fixed();")
+                                        .build()))
+                                .build())
                         .build())
                 .build();
     }

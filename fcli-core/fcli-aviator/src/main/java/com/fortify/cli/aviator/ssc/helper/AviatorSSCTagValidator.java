@@ -81,7 +81,7 @@ public final class AviatorSSCTagValidator {
             LOG.info("Fetched {} custom tags for app version id={} from SSC.", versionCustomTags.size(), versionId);
             LOG.debug("Version custom tags: {}", versionCustomTags);
 
-            validateAviatorCustomTags(versionCustomTags, warnings);
+            validateAviatorCustomTags(versionCustomTags, unirest, warnings);
             validateAnalysisTagValues(versionCustomTags, unirest, analysisTagId, analysisTagValues, warnings);
 
             if (warnings.isEmpty()) {
@@ -130,9 +130,11 @@ public final class AviatorSSCTagValidator {
      * Checks that both Aviator custom tags (Aviator prediction, Aviator status)
      * exist on the SSC instance. These are created by {@code aviator ssc prepare}.
      */
-    private static void validateAviatorCustomTags(ArrayNode allCustomTags, List<String> warnings) {
+    private static void validateAviatorCustomTags(ArrayNode allCustomTags, UnirestInstance unirest,
+            List<String> warnings) {
         validateTagExists(allCustomTags, AviatorSSCTagDefs.AVIATOR_PREDICTION_TAG, warnings);
         validateTagExists(allCustomTags, AviatorSSCTagDefs.AVIATOR_STATUS_TAG, warnings);
+        validateTagValues(allCustomTags, unirest, AviatorSSCTagDefs.AVIATOR_STATUS_TAG, warnings);
     }
 
     private static void validateTagExists(ArrayNode versionCustomTags, AviatorSSCTagDefs.TagDefinition tagDef,
@@ -157,6 +159,57 @@ public final class AviatorSSCTagValidator {
                 tagDef.getName(), tagDef.getGuid());
             LOG.warn(msg);
             warnings.add(msg);
+        }
+    }
+
+    private static void validateTagValues(ArrayNode versionCustomTags, UnirestInstance unirest,
+            AviatorSSCTagDefs.TagDefinition tagDefinition, List<String> warnings) {
+        JsonNode tag = JsonHelper.stream(versionCustomTags)
+            .filter(candidate -> tagDefinition.getGuid().equalsIgnoreCase(candidate.path("guid").asText()))
+            .findFirst().orElse(null);
+        if (tag == null) {
+            return;
+        }
+
+        String tagId = tag.path("id").asText();
+        if (tagId.isBlank()) {
+            return;
+        }
+
+        JsonNode tagDetails;
+        try {
+            tagDetails = unirest.get(SSCUrls.CUSTOM_TAG(tagId))
+                .asObject(JsonNode.class).getBody().path("data");
+        } catch (Exception e) {
+            LOG.debug("Could not retrieve values for Aviator tag '{}': {}", tagDefinition.getName(), e.getMessage());
+            return;
+        }
+
+        if (!"LIST".equalsIgnoreCase(tagDetails.path("valueType").asText())) {
+            return;
+        }
+
+        JsonNode valueListNode = tagDetails.get("valueList");
+        if (valueListNode == null || !valueListNode.isArray()) {
+            LOG.debug("SSC did not expose a value list for Aviator tag '{}'; skipping value validation.",
+                tagDefinition.getName());
+            return;
+        }
+
+        Set<String> existingValues = JsonHelper.stream((ArrayNode) valueListNode)
+            .map(value -> value.path("lookupValue").asText())
+            .collect(Collectors.toSet());
+        List<String> missingValues = tagDefinition.getValues().stream()
+            .filter(value -> !existingValues.contains(value))
+            .toList();
+        if (!missingValues.isEmpty()) {
+            String tagName = tagDetails.path("name").asText(tagDefinition.getName());
+            String message = String.format(
+                "WARN: Aviator tag '%s' (GUID: %s) is missing the following values: %s. "
+                    + "Audit results using these values may not be reflected in SSC. Verify the tag configuration.",
+                tagName, tagDefinition.getGuid(), missingValues);
+            LOG.warn(message);
+            warnings.add(message);
         }
     }
 

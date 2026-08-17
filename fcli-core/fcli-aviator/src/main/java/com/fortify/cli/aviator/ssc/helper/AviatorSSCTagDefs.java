@@ -15,6 +15,7 @@ package com.fortify.cli.aviator.ssc.helper;
 import java.util.List;
 
 import com.formkiq.graalvm.annotations.Reflectable;
+import com.fortify.cli.aviator.util.Constants;
 
 import lombok.Getter;
 import lombok.RequiredArgsConstructor;
@@ -32,20 +33,20 @@ public final class AviatorSSCTagDefs {
     }
 
     public static final TagDefinition AVIATOR_PREDICTION_TAG = new TagDefinition(
-            "C2D6EC66-CCB3-4FB9-9EE0-0BB02F51008F",
+            Constants.AVIATOR_PREDICTION_TAG_ID,
             "Aviator prediction",
             "LIST",
             List.of(
-                    "AVIATOR:Not an Issue", "AVIATOR:Remediation Required", "AVIATOR:Unsure",
-                    "AVIATOR:Excluded due to Limiting", "AVIATOR:Suspicious", "AVIATOR:Proposed Not an Issue"
+                    Constants.AVIATOR_NOT_AN_ISSUE, Constants.AVIATOR_REMEDIATION_REQUIRED, Constants.AVIATOR_UNSURE,
+                    Constants.AVIATOR_EXCLUDED, Constants.AVIATOR_LIKELY_TP, Constants.AVIATOR_LIKELY_FP
             )
     );
 
     public static final TagDefinition AVIATOR_STATUS_TAG = new TagDefinition(
-            "FB7B0462-2C2E-46D9-811A-DCC1F3C83051",
+            Constants.AVIATOR_STATUS_TAG_ID,
             "Aviator status",
             "LIST",
-            List.of("PROCESSED_BY_AVIATOR")
+            List.of(Constants.PROCESSED_BY_AVIATOR, Constants.PROCESSED_BY_AVIATOR_WITH_REMEDIATION)
     );
 
     /**

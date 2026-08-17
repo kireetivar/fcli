@@ -126,23 +126,25 @@ public class IssueAuditor {
 
     private TagDefinition resolveAviatorPredictionTag() {
         String name = "Aviator prediction";
-        String id = "C2D6EC66-CCB3-4FB9-9EE0-0BB02F51008F";
+        String id = Constants.AVIATOR_PREDICTION_TAG_ID;
 
-        List<String> values = Arrays.asList(Constants.AVIATOR_NOT_AN_ISSUE, Constants.AVIATOR_REMEDIATION_REQUIRED, Constants.AVIATOR_UNSURE, Constants.AVIATOR_EXCLUDED, Constants.AVIATOR_LIKELY_TP, Constants.AVIATOR_LIKELY_FP);
+        List<String> values = List.of(Constants.AVIATOR_NOT_AN_ISSUE, Constants.AVIATOR_REMEDIATION_REQUIRED,
+                Constants.AVIATOR_UNSURE, Constants.AVIATOR_EXCLUDED, Constants.AVIATOR_LIKELY_TP,
+                Constants.AVIATOR_LIKELY_FP);
         return new TagDefinition(name, id, values, false);
     }
 
     private TagDefinition resolveAviatorStatusTag() {
         String name = "Aviator status";
-        String id = "FB7B0462-2C2E-46D9-811A-DCC1F3C83051";
+        String id = Constants.AVIATOR_STATUS_TAG_ID;
 
-        List<String> values = List.of(Constants.PROCESSED_BY_AVIATOR);
+        List<String> values = List.of(Constants.PROCESSED_BY_AVIATOR, Constants.PROCESSED_BY_AVIATOR_WITH_REMEDIATION);
         return new TagDefinition(name, id, values, false);
     }
 
     private TagDefinition resolveHumanAuditStatus() {
         String name = "FoD";
-        String id = "604f0fbe-b5fe-47cd-a9cb-587ad8ebe93a";
+        String id = Constants.FOD_TAG_ID;
 
         List<String> values = Arrays.asList(Constants.PENDING_REVIEW, Constants.FALSE_POSITIVE, Constants.EXPLOITABLE, Constants.SUSPICIOUS, Constants.SANITIZED);
         return new TagDefinition(name, id, values, false);
@@ -233,7 +235,8 @@ public class IssueAuditor {
 
         if (humanAuditTag != null) {
             String issueId = userPrompt.getIssueData().getInstanceID();
-            String status = Optional.ofNullable(auditIssueMap.get(issueId)).map(AuditIssue::getTags).map(tags -> tags.get("604f0fbe-b5fe-47cd-a9cb-587ad8ebe93a")).orElse(null);
+            String status = Optional.ofNullable(auditIssueMap.get(issueId)).map(AuditIssue::getTags)
+                    .map(tags -> tags.get(Constants.FOD_TAG_ID)).orElse(null);
             if (!StringUtil.isEmpty(status) && !Constants.PENDING_REVIEW.equalsIgnoreCase(status)) {
                 LOG.debug("Skipping because already manually audited: {}", issueId);
                 return false;
@@ -242,9 +245,12 @@ public class IssueAuditor {
 
         if (aviatorStatusTag != null) {
             String issueId = userPrompt.getIssueData().getInstanceID();
-            String status = Optional.ofNullable(auditIssueMap.get(issueId)).map(AuditIssue::getTags).map(tags -> tags.get("FB7B0462-2C2E-46D9-811A-DCC1F3C83051")).orElse(null);
-            if (!StringUtil.isEmpty(status) && Constants.PROCESSED_BY_AVIATOR.equalsIgnoreCase(status)) {
-                LOG.debug("Skipping already PROCESSED_BY_AVIATOR: {}", issueId);
+            String status = Optional.ofNullable(auditIssueMap.get(issueId)).map(AuditIssue::getTags)
+                    .map(tags -> tags.get(Constants.AVIATOR_STATUS_TAG_ID)).orElse(null);
+            if (!StringUtil.isEmpty(status)
+                    && (Constants.PROCESSED_BY_AVIATOR.equalsIgnoreCase(status)
+                    || Constants.PROCESSED_BY_AVIATOR_WITH_REMEDIATION.equalsIgnoreCase(status))) {
+                LOG.debug("Skipping already processed by Aviator: {}", issueId);
                 return false;
             }
         }
