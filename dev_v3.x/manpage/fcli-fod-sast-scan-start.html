@@ -17,7 +17,7 @@ fcli_version:
 </head>
 <body class="manpage toc2 toc-left">
 
-{% include banner.html bannerTitle="FCLI: The Universal Fortify CLI" currentVersion="0.20260825.043651-dev_v3.x" %}
+{% include banner.html bannerTitle="FCLI: The Universal Fortify CLI" currentVersion="0.20261006.060907-dev_v3.x" %}
 
 
 <div id="header">
@@ -50,7 +50,8 @@ fcli_version:
                          [<strong>--in-progress-action</strong>=<em>&lt;inProgressScanActionType&gt;</em>]
                          [<strong>--notes</strong>=<em>&lt;notes&gt;</em>] [<strong>--progress</strong>=<em>&lt;type&gt;</em>] <strong>--rel</strong>=<em>id|app[:</em>
                  _        ms]:rel_
-                         [<strong>--remediation</strong>=<em>&lt;remediationScanPreferenceType&gt;</em>] [[<strong>-h</strong>]
+                         [<strong>--remediation</strong>=<em>&lt;remediationScanPreferenceType&gt;</em>]
+                         [<strong>--scan-policy</strong>=<em>&lt;scanPolicy&gt;</em>] [[<strong>-h</strong>]
                          [<strong>--env-prefix</strong>=<em>&lt;prefix&gt;</em>] [<strong>--log-file</strong>=<em>&lt;logFile&gt;</em>]
                          [<strong>--log-level</strong>=<em>&lt;logLevel&gt;</em>] [<strong>--log-mask</strong>=<em>&lt;level&gt;</em>]
                          [<strong>--debug</strong>]] [[<strong>--fod-session</strong>=<em>&lt;sessionName&gt;</em>]]
@@ -104,6 +105,10 @@ fcli_version:
 <dd>
 <p>The remediation preference to use. Valid values: RemediationScanIfAvailable, RemediationScanOnly, NonRemediationScanOnly.</p>
 </dd>
+<dt class="hdlist1"><strong>--scan-policy</strong>=<em>&lt;scanPolicy&gt;</em></dt>
+<dd>
+<p>Override the scan policy configured for the release. Use 'legacy' for the FoD legacy policy. If omitted, the configured scan policy is used.</p>
+</dd>
 <dt class="hdlist1"><strong>--validate-entitlement</strong></dt>
 <dd>
 <p>Validate if an entitlement has been set and is still valid.</p>
@@ -140,7 +145,7 @@ fcli_version:
 </dd>
 <dt class="hdlist1">*--style*<em>=&lt;style&gt;,&#8230;&#8203;</em></dt>
 <dd>
-<p>Select output style: header, no-header, pretty, no-pretty, flat, no-flat, array, single, border, no-border, md-border, wrap, no-wrap, fast-output, no-fast-output, envelope, no-envelope.</p>
+<p>Select output style: header, no-header, pretty, no-pretty, flat, no-flat, array, single, border, no-border, md-border, wrap, no-wrap, fast-output, no-fast-output, envelope, no-envelope, csv-escape, no-csv-escape.</p>
 </dd>
 <dt class="hdlist1"><strong>--to-file</strong>=<em>&lt;outputFile&gt;</em></dt>
 <dd>
@@ -188,7 +193,7 @@ fcli_version:
 <div id="footer">
 <div id="footer-text">
 Version <br>
-Last updated 2026-08-25 04:39:27 UTC
+Last updated 2026-10-06 06:11:46 UTC
 </div>
 </div>
 </body>
