@@ -16,7 +16,6 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 
 import java.io.IOException;
-import java.lang.reflect.Method;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -26,7 +25,6 @@ import java.util.Collections;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
-import java.util.concurrent.ConcurrentLinkedDeque;
 import java.util.stream.Collectors;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -37,12 +35,14 @@ import org.junit.jupiter.api.Test;
 
 import com.fortify.cli.aviator.audit.model.AuditFprOptions;
 import com.fortify.cli.aviator.audit.model.FilterSelection;
+import com.fortify.cli.aviator.audit.model.SastAuditMode;
 import com.fortify.cli.aviator.audit.model.UserPrompt;
 import com.fortify.cli.aviator.config.IAviatorLogger;
 import com.fortify.cli.aviator.fpr.Vulnerability;
 import com.fortify.cli.aviator.fpr.filter.Filter;
 import com.fortify.cli.aviator.fpr.filter.FilterSet;
 import com.fortify.cli.aviator.fpr.filter.FilterTemplate;
+import com.fortify.cli.aviator.fpr.filter.FolderDefinition;
 import com.fortify.cli.aviator.fpr.model.AuditIssue;
 import com.fortify.cli.aviator.fpr.model.FPRInfo;
 import com.fortify.cli.aviator.fpr.model.FVDLMetadata;
@@ -162,12 +162,88 @@ class IssueAuditorTest {
     }
 
     @Test
-    void forceReauditStillSkipsHumanTriagedIssue() throws Exception {
+    void forceReauditDoesNotAssumeHumanOwnershipWithoutTagHistory() throws Exception {
         IssueAuditor auditor = createIssueAuditor(true, false, Map.of(
                 Constants.AVIATOR_STATUS_TAG_ID, Constants.PROCESSED_BY_AVIATOR,
                 Constants.FOD_TAG_ID, Constants.EXPLOITABLE));
 
+        assertEquals(List.of(TEST_ISSUE_ID), prepareIssueIds(auditor));
+    }
+
+    @Test
+    void includeHumanModeReauditsHumanOnlyIssues() throws Exception {
+        Map<String, String> tags = Map.of(Constants.ANALYSIS_TAG_ID, Constants.EXPLOITABLE);
+        Map<String, String> writers = Map.of(Constants.ANALYSIS_TAG_ID, "analyst.user");
+
+        assertTrue(prepareIssueIds(createIssueAuditor(SastAuditMode.REAUDIT_AVIATOR, false, tags, writers)).isEmpty());
+        assertEquals(List.of(TEST_ISSUE_ID), prepareIssueIds(
+            createIssueAuditor(SastAuditMode.REAUDIT_AVIATOR_AND_HUMAN, false, tags, writers)));
+    }
+
+    @Test
+    void humanAnalysisOwnershipIsNotReplacedByAviatorStatusOwnership() throws Exception {
+        Map<String, String> tags = Map.of(
+            Constants.ANALYSIS_TAG_ID, Constants.EXPLOITABLE,
+            Constants.AVIATOR_STATUS_TAG_ID, Constants.PROCESSED_BY_AVIATOR);
+        Map<String, String> writers = Map.of(
+            Constants.ANALYSIS_TAG_ID, "analyst.user",
+            Constants.AVIATOR_STATUS_TAG_ID, Constants.USER_NAME);
+
+        assertTrue(prepareIssueIds(createIssueAuditor(SastAuditMode.REAUDIT_AVIATOR, false, tags, writers)).isEmpty());
+        assertEquals(List.of(TEST_ISSUE_ID), prepareIssueIds(
+            createIssueAuditor(SastAuditMode.REAUDIT_AVIATOR_AND_HUMAN, false, tags, writers)));
+    }
+
+    @Test
+    void forceReauditStillAppliesFilterSetAndFolderRestrictions() throws Exception {
+        FilterSet filterSet = new FilterSet();
+        filterSet.setTitle("Selected folder");
+        filterSet.setFilters(List.of());
+        FolderDefinition folder = new FolderDefinition();
+        folder.setId("selected-folder-id");
+        folder.setName("Selected");
+        filterSet.setFolderDefinitions(List.of(folder));
+        IssueAuditor auditor = createIssueAuditorWithSelection(SastAuditMode.REAUDIT_AVIATOR, false,
+            Map.of(Constants.AVIATOR_STATUS_TAG_ID, Constants.PROCESSED_BY_AVIATOR), Map.of(),
+            new FilterSelection(filterSet, List.of("Selected")));
+
         assertTrue(prepareIssueIds(auditor).isEmpty());
+    }
+
+    @Test
+    void quotaPriorityRunsOnlyOnEligiblePrompts() throws Exception {
+        Vulnerability humanCritical = vulnerability("human-critical", "Critical");
+        Vulnerability aviatorHigh = vulnerability("aviator-high", "High");
+        Vulnerability aviatorLow = vulnerability("aviator-low", "Low");
+        Map<String, AuditIssue> auditIssues = Map.of(
+            "human-critical", AuditIssue.builder()
+                .tags(Map.of(Constants.ANALYSIS_TAG_ID, Constants.EXPLOITABLE))
+                .lastTagUsernames(Map.of(Constants.ANALYSIS_TAG_ID, "analyst.user"))
+                .build(),
+            "aviator-high", AuditIssue.builder()
+                .tags(Map.of(Constants.AVIATOR_STATUS_TAG_ID, Constants.PROCESSED_BY_AVIATOR)).build(),
+            "aviator-low", AuditIssue.builder()
+                .tags(Map.of(Constants.AVIATOR_STATUS_TAG_ID, Constants.PROCESSED_BY_AVIATOR)).build());
+        FPRInfo fprInfo = new FPRInfo(fprHandle);
+        FilterTemplate filterTemplate = new FilterTemplate();
+        filterTemplate.setTagDefinitions(new ArrayList<>());
+        fprInfo.setFilterTemplate(filterTemplate);
+        IssueAuditor auditor = IssueAuditor.builder()
+            .vulnerabilities(List.of(humanCritical, aviatorHigh, aviatorLow))
+            .auditIssueMap(auditIssues)
+            .fprInfo(fprInfo)
+            .filterSelection(new FilterSelection(null, null))
+            .sourceLanguageResolver(new SourceLanguageResolver(new FVDLMetadata()))
+            .options(auditOptions(SastAuditMode.REAUDIT_AVIATOR, NO_OP_LOGGER, null))
+            .build();
+
+        List<UserPrompt> eligiblePrompts = auditor.preparePrompts();
+        List<UserPrompt> selectedPrompts = QuotaBasedFilter.filterByQuota(eligiblePrompts, 1);
+
+        assertEquals(List.of("aviator-high", "aviator-low"), eligiblePrompts.stream()
+            .map(prompt -> prompt.getIssueData().getInstanceID()).toList());
+        assertEquals(List.of("aviator-high"), selectedPrompts.stream()
+            .map(prompt -> prompt.getIssueData().getInstanceID()).toList());
     }
 
     @Test
@@ -282,16 +358,40 @@ class IssueAuditorTest {
     }
 
     private IssueAuditor createIssueAuditor(boolean forceReaudit, boolean suppressed, Map<String, String> tags) {
-        return createIssueAuditor(forceReaudit, suppressed, tags, Map.of(), null);
+        return createIssueAuditor(forceReaudit ? SastAuditMode.REAUDIT_AVIATOR : SastAuditMode.UNAUDITED,
+                suppressed, tags, Map.of(), null);
     }
 
     private IssueAuditor createIssueAuditor(boolean forceReaudit, boolean suppressed, Map<String, String> tags,
             Map<String, String> lastTagUsernames) {
-        return createIssueAuditor(forceReaudit, suppressed, tags, lastTagUsernames, null);
+        return createIssueAuditor(forceReaudit ? SastAuditMode.REAUDIT_AVIATOR : SastAuditMode.UNAUDITED,
+            suppressed, tags, lastTagUsernames, null);
     }
 
     private IssueAuditor createIssueAuditor(boolean forceReaudit, boolean suppressed, Map<String, String> tags,
             Map<String, String> lastTagUsernames, String tagMappingPath) {
+        return createIssueAuditor(forceReaudit ? SastAuditMode.REAUDIT_AVIATOR : SastAuditMode.UNAUDITED,
+                suppressed, tags, lastTagUsernames, tagMappingPath);
+    }
+
+    private IssueAuditor createIssueAuditor(SastAuditMode mode, boolean suppressed, Map<String, String> tags,
+            Map<String, String> lastTagUsernames) {
+        return createIssueAuditor(mode, suppressed, tags, lastTagUsernames, null, new FilterSelection(null, null));
+    }
+
+    private IssueAuditor createIssueAuditorWithSelection(SastAuditMode mode, boolean suppressed,
+            Map<String, String> tags, Map<String, String> lastTagUsernames, FilterSelection filterSelection) {
+        return createIssueAuditor(mode, suppressed, tags, lastTagUsernames, (String) null, filterSelection);
+    }
+
+    private IssueAuditor createIssueAuditor(SastAuditMode mode, boolean suppressed, Map<String, String> tags,
+            Map<String, String> lastTagUsernames, String tagMappingPath) {
+        return createIssueAuditor(mode, suppressed, tags, lastTagUsernames, tagMappingPath,
+                new FilterSelection(null, null));
+    }
+
+    private IssueAuditor createIssueAuditor(SastAuditMode mode, boolean suppressed, Map<String, String> tags,
+            Map<String, String> lastTagUsernames, String tagMappingPath, FilterSelection filterSelection) {
         FPRInfo fprInfo = new FPRInfo(fprHandle);
         FilterTemplate filterTemplate = new FilterTemplate();
         filterTemplate.setTagDefinitions(new ArrayList<>());
@@ -310,33 +410,37 @@ class IssueAuditorTest {
                 .vulnerabilities(List.of(vulnerability))
                 .auditIssueMap(Map.of(TEST_ISSUE_ID, auditIssue))
                 .fprInfo(fprInfo)
-                .filterSelection(new FilterSelection(null, null))
+                .filterSelection(filterSelection)
                 .sourceLanguageResolver(new SourceLanguageResolver(new FVDLMetadata()))
-                .options(auditOptions(forceReaudit, NO_OP_LOGGER, tagMappingPath))
+                .options(auditOptions(mode, NO_OP_LOGGER, tagMappingPath))
                 .build();
     }
 
-    private AuditFprOptions auditOptions(boolean forceReaudit, IAviatorLogger logger) {
-        return auditOptions(forceReaudit, logger, null);
+    private AuditFprOptions auditOptions(boolean forceReaudit, IAviatorLogger logger, String tagMappingPath) {
+        return auditOptions(forceReaudit ? SastAuditMode.REAUDIT_AVIATOR : SastAuditMode.UNAUDITED,
+                logger, tagMappingPath);
     }
 
-    private AuditFprOptions auditOptions(boolean forceReaudit, IAviatorLogger logger, String tagMappingPath) {
+    private AuditFprOptions auditOptions(SastAuditMode mode, IAviatorLogger logger, String tagMappingPath) {
         return AuditFprOptions.builder()
                 .fprHandle(fprHandle)
                 .logger(logger)
                 .sscAppName("TestApp")
                 .sscAppVersion("1.0")
                 .tagMappingPath(tagMappingPath)
-                .forceReaudit(forceReaudit)
+                .mode(mode)
                 .build();
     }
 
-    @SuppressWarnings("unchecked")
+    private Vulnerability vulnerability(String issueId, String priority) {
+        Vulnerability vulnerability = new Vulnerability();
+        vulnerability.setInstanceID(issueId);
+        vulnerability.setPriority(priority);
+        return vulnerability;
+    }
+
     private List<String> prepareIssueIds(IssueAuditor auditor) throws Exception {
-        Method prepareMethod = IssueAuditor.class.getDeclaredMethod("prepareAndFilterPrompts");
-        prepareMethod.setAccessible(true);
-        ConcurrentLinkedDeque<UserPrompt> prompts = (ConcurrentLinkedDeque<UserPrompt>) prepareMethod.invoke(auditor);
-        return prompts.stream()
+        return auditor.preparePrompts().stream()
                 .map(prompt -> prompt.getIssueData().getInstanceID())
                 .collect(Collectors.toList());
     }
@@ -393,17 +497,11 @@ class IssueAuditorTest {
                 .fprInfo(fprInfo)
                 .filterSelection(selection)
                 .sourceLanguageResolver(new SourceLanguageResolver(new FVDLMetadata()))
-                .options(auditOptions(false, dummyLogger))
+                .options(auditOptions(SastAuditMode.REAUDIT_AVIATOR, dummyLogger, null))
                 .build();
 
-        Method filterMethod = IssueAuditor.class.getDeclaredMethod("filterVulnerabilities", List.class, FilterSet.class);
-        filterMethod.setAccessible(true);
-
-        @SuppressWarnings("unchecked")
-        List<Vulnerability> results = (List<Vulnerability>) filterMethod.invoke(auditor, inputList, filterSet);
-
-        List<String> remainingIds = results.stream()
-                .map(Vulnerability::getInstanceID)
+            List<String> remainingIds = auditor.preparePrompts().stream()
+                .map(prompt -> prompt.getIssueData().getInstanceID())
                 .collect(Collectors.toList());
 
         assertEquals(1, remainingIds.size(), "Should verify that exactly one issue remains");

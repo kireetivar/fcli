@@ -28,6 +28,7 @@ import org.junit.jupiter.api.Test;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.node.ArrayNode;
 import com.fasterxml.jackson.databind.node.ObjectNode;
+import com.fortify.cli.aviator.audit.model.SastAuditMode;
 import com.fortify.cli.aviator.config.AviatorLoggerImpl;
 import com.fortify.cli.aviator.util.Constants;
 import com.fortify.cli.common.json.JsonHelper;
@@ -46,72 +47,95 @@ class AviatorSSCAuditHelperTest {
     void excludesPreviouslyProcessedIssuesFromNormalPreflightCount() throws Exception {
         try (var server = new TestSscServer(processedIssue(), legacyAnalysisIssue(), unprocessedIssue());
                 var unirest = newUnirest(server)) {
-            assertEquals(1, AviatorSSCAuditHelper.getAuditableIssueCount(
-                    unirest, appVersion(), logger(), true, null, null, false));
+            assertEquals(1, AviatorSSCAuditHelper.getPreliminaryCandidateCount(
+                    unirest, appVersion(), logger(), true, null, null, SastAuditMode.UNAUDITED));
             assertTrue(server.getLastIssueQuery().contains("q=audited:false"));
         }
     }
 
     @Test
-    void forceReauditPreflightIncludesPreviouslyProcessedIssues() throws Exception {
+    void aviatorReauditPreflightIncludesPreviouslyProcessedIssues() throws Exception {
         try (var server = new TestSscServer(processedIssue(), unprocessedIssue());
                 var unirest = newUnirest(server)) {
-            assertEquals(2, AviatorSSCAuditHelper.getAuditableIssueCount(
-                    unirest, appVersion(), logger(), true, null, null, true));
+            assertEquals(2, AviatorSSCAuditHelper.getPreliminaryCandidateCount(
+                    unirest, appVersion(), logger(), true, null, null, SastAuditMode.REAUDIT_AVIATOR));
             assertFalse(server.getLastIssueQuery().contains("q=audited:false"));
         }
     }
 
     @Test
-    void forceReauditPreflightIncludesLegacyAnalysisTagCandidates() throws Exception {
+    void aviatorReauditPreflightIncludesLegacyAnalysisTagCandidates() throws Exception {
         try (var server = new TestSscServer(legacyAnalysisIssue());
                 var unirest = newUnirest(server)) {
-            assertEquals(1, AviatorSSCAuditHelper.getAuditableIssueCount(
-                    unirest, appVersion(), logger(), true, null, null, true));
+            assertEquals(1, AviatorSSCAuditHelper.getPreliminaryCandidateCount(
+                    unirest, appVersion(), logger(), true, null, null, SastAuditMode.REAUDIT_AVIATOR));
         }
     }
 
     @Test
-    void forceReauditPreflightDoesNotSkipAnAllProcessedApplicationVersion() throws Exception {
+    void aviatorReauditPreflightDoesNotSkipAnAllProcessedApplicationVersion() throws Exception {
         try (var server = new TestSscServer(processedIssue());
                 var unirest = newUnirest(server)) {
-            assertEquals(1, AviatorSSCAuditHelper.getAuditableIssueCount(
-                    unirest, appVersion(), logger(), true, null, null, true));
+            assertEquals(1, AviatorSSCAuditHelper.getPreliminaryCandidateCount(
+                    unirest, appVersion(), logger(), true, null, null, SastAuditMode.REAUDIT_AVIATOR));
             assertFalse(server.getLastIssueQuery().contains("q=audited:false"));
         }
     }
 
     @Test
-    void forceReauditPreflightExcludesAuditedIssuesWithoutAviatorOrLegacyResultTag() throws Exception {
+    void reAuditPreflightDoesNotDependOnExistingAuditTags() throws Exception {
         try (var server = new TestSscServer(processedIssue(), unprocessedIssue(), humanAuditedIssue());
                 var unirest = newUnirest(server)) {
-            assertEquals(2, AviatorSSCAuditHelper.getAuditableIssueCount(
-                    unirest, appVersion(), logger(), true, null, null, true));
+            assertEquals(3, AviatorSSCAuditHelper.getPreliminaryCandidateCount(
+                    unirest, appVersion(), logger(), true, null, null, SastAuditMode.REAUDIT_AVIATOR));
             assertFalse(server.getLastIssueQuery().contains("q=audited:false"));
         }
     }
 
     @Test
-    void forceReauditPreflightExcludesSuppressedAviatorIssues() throws Exception {
-        try (var server = new TestSscServer(processedIssue(), suppressedProcessedIssue(), suppressedLegacyAnalysisIssue());
+    void reAuditPreflightFindsHumanOnlyAuditedCandidates() throws Exception {
+        try (var server = new TestSscServer(humanAuditedIssue());
                 var unirest = newUnirest(server)) {
-            assertEquals(1, AviatorSSCAuditHelper.getAuditableIssueCount(
-                    unirest, appVersion(), logger(), true, null, null, true));
+            assertEquals(1, AviatorSSCAuditHelper.getPreliminaryCandidateCount(
+                    unirest, appVersion(), logger(), true, null, null, SastAuditMode.REAUDIT_AVIATOR_AND_HUMAN));
+            assertFalse(server.getLastIssueQuery().contains("q=audited:false"));
         }
     }
 
     @Test
-    void forceReauditCategoryBreakdownIncludesFullyAuditedCategories() throws Exception {
-        try (var server = new TestSscServer(processedIssue());
+    void reAuditPreflightExcludesSuppressedCandidates() throws Exception {
+        try (var server = new TestSscServer(processedIssue(), suppressedProcessedIssue(), suppressedLegacyAnalysisIssue());
                 var unirest = newUnirest(server)) {
-            List<Map<String, Object>> categories = AviatorSSCAuditHelper.getTopUnauditedCategories(
-                    unirest, appVersion(), logger(), 10, true);
-
-            assertEquals(1, categories.size());
-            assertEquals("Category A", categories.get(0).get("categoryName"));
-            assertEquals(1L, categories.get(0).get("unauditedCount"));
-            assertEquals(1, server.getSelectorSetRequestCount());
+            assertEquals(1, AviatorSSCAuditHelper.getPreliminaryCandidateCount(
+                    unirest, appVersion(), logger(), true, null, null, SastAuditMode.REAUDIT_AVIATOR));
         }
+    }
+
+    @Test
+    void incompletePreflightPagesDoNotReportZeroCandidates() throws Exception {
+        try (var server = new TestSscServer(3, unprocessedIssue());
+                var unirest = newUnirest(server)) {
+            assertEquals(-1, AviatorSSCAuditHelper.getPreliminaryCandidateCount(
+                    unirest, appVersion(), logger(), true, null, null, SastAuditMode.UNAUDITED));
+        }
+    }
+
+    @Test
+    void quotaCategoriesUsePreparedEligibleIssueCounts() {
+        List<Map<String, Object>> categories = AviatorSSCAuditHelper.getTopEligibleCategories(
+                Map.of("Low", 1, "Critical", 4, "High", 2), 2);
+
+        assertEquals(List.of("Critical", "High"), categories.stream()
+                .map(category -> (String) category.get("categoryName")).toList());
+        assertEquals(4L, categories.get(0).get("unauditedCount"));
+        assertEquals(4L, categories.get(0).get("eligibleCount"));
+        assertEquals(2L, categories.get(1).get("unauditedCount"));
+
+        String message = AviatorSSCAuditHelper.formatQuotaExceededMessage(appVersion(), 6, 5, categories);
+        assertTrue(message.contains("Eligible issues: 6"));
+        assertTrue(message.contains("Critical (eligible: 4)"));
+        ObjectNode result = AviatorSSCAuditHelper.buildQuotaExceededResultNode(appVersion(), 6, 5, categories);
+        assertEquals(4, result.path("state").path("ssc").path("issuesByCategory").get(0).path("eligible").asInt());
     }
 
     private static SSCAppVersionDescriptor appVersion() {
@@ -163,7 +187,9 @@ class AviatorSSCAuditHelperTest {
     private static ObjectNode humanAuditedIssue() {
         ObjectNode issue = JsonHelper.getObjectMapper().createObjectNode();
         issue.put("audited", true);
-        issue.putObject("_embed").putArray("auditValues");
+        issue.putObject("_embed").putArray("auditValues").addObject()
+            .put("customTagGuid", Constants.FOD_TAG_ID)
+            .put("customTagIndex", 2);
         return issue;
     }
 
@@ -180,19 +206,23 @@ class AviatorSSCAuditHelperTest {
     }
 
     private static final class TestSscServer implements AutoCloseable {
+        private static final int PAGE_LIMIT = 200;
         private final HttpServer server;
         private final ArrayNode issues = JsonHelper.getObjectMapper().createArrayNode();
-        private int selectorSetRequestCount;
+        private final long reportedIssueCount;
         private String lastIssueQuery = "";
 
         private TestSscServer(ObjectNode... issueNodes) throws IOException {
+            this(-1, issueNodes);
+        }
+
+        private TestSscServer(long reportedIssueCount, ObjectNode... issueNodes) throws IOException {
+            this.reportedIssueCount = reportedIssueCount;
             for (ObjectNode issue : issueNodes) {
                 issues.add(issue);
             }
             server = HttpServer.create(new InetSocketAddress(0), 0);
             server.createContext("/api/v1/projectVersions/42/issues", this::handleIssues);
-            server.createContext("/api/v1/projectVersions/42/issueSelectorSet", this::handleSelectorSet);
-            server.createContext("/api/v1/projectVersions/42/issueGroups", this::handleIssueGroups);
             server.start();
         }
 
@@ -210,9 +240,15 @@ class AviatorSSCAuditHelperTest {
                 }
                 matchingIssues.add(issue);
             }
+            int start = getQueryParameter("start", 0);
+            ArrayNode page = JsonHelper.getObjectMapper().createArrayNode();
+            for (int index = start; index < Math.min(start + PAGE_LIMIT, matchingIssues.size()); index++) {
+                page.add(matchingIssues.get(index));
+            }
+            long count = reportedIssueCount >= 0 ? reportedIssueCount : matchingIssues.size();
             byte[] response = JsonHelper.getObjectMapper().createObjectNode()
-                    .put("count", matchingIssues.size())
-                    .set("data", matchingIssues)
+                    .put("count", count)
+                    .set("data", page)
                     .toString()
                     .getBytes(StandardCharsets.UTF_8);
             exchange.getResponseHeaders().set("Content-Type", "application/json");
@@ -222,40 +258,18 @@ class AviatorSSCAuditHelperTest {
             }
         }
 
-        private void handleSelectorSet(HttpExchange exchange) throws IOException {
-            selectorSetRequestCount++;
-            ObjectNode data = JsonHelper.getObjectMapper().createObjectNode();
-            data.putArray("filterBySet");
-            data.putArray("groupBySet").addObject()
-                    .put("guid", "category-guid")
-                    .put("displayName", "Category");
-            writeJson(exchange, JsonHelper.getObjectMapper().createObjectNode().set("data", data));
-        }
-
-        private void handleIssueGroups(HttpExchange exchange) throws IOException {
-            ObjectNode group = JsonHelper.getObjectMapper().createObjectNode()
-                    .put("id", "Category A")
-                    .put("visibleCount", 1)
-                    .put("auditedCount", 1);
-            ArrayNode data = JsonHelper.getObjectMapper().createArrayNode().add(group);
-            writeJson(exchange, JsonHelper.getObjectMapper().createObjectNode().set("data", data));
-        }
-
-        private void writeJson(HttpExchange exchange, ObjectNode responseNode) throws IOException {
-            byte[] response = responseNode.toString().getBytes(StandardCharsets.UTF_8);
-            exchange.getResponseHeaders().set("Content-Type", "application/json");
-            exchange.sendResponseHeaders(200, response.length);
-            try (var outputStream = exchange.getResponseBody()) {
-                outputStream.write(response);
+        private int getQueryParameter(String name, int defaultValue) {
+            for (String parameter : lastIssueQuery.split("&")) {
+                String[] pair = parameter.split("=", 2);
+                if (pair.length == 2 && name.equals(pair[0])) {
+                    return Integer.parseInt(pair[1]);
+                }
             }
+            return defaultValue;
         }
 
         private String getLastIssueQuery() {
             return lastIssueQuery;
-        }
-
-        private int getSelectorSetRequestCount() {
-            return selectorSetRequestCount;
         }
 
         @Override

@@ -53,7 +53,6 @@ import com.fortify.cli.aviator.fpr.filter.VulnerabilityFilterer;
 import com.fortify.cli.aviator.fpr.model.AuditIssue;
 import com.fortify.cli.aviator.fpr.model.FPRInfo;
 import com.fortify.cli.aviator.fpr.model.FVDLMetadata;
-import com.fortify.cli.aviator.fpr.processor.AuditProcessor;
 import com.fortify.cli.aviator.grpc.AviatorGrpcClient;
 import com.fortify.cli.aviator.grpc.AviatorGrpcClientHelper;
 import com.fortify.cli.aviator.util.Constants;
@@ -77,24 +76,20 @@ public class IssueAuditor {
     public final String SSCApplicationVersion;
 
     private List<Vulnerability> vulnerabilities;
-    private List<UserPrompt> userPrompts;
-    private final AuditProcessor auditProcessor;
     private final Map<String, AuditIssue> auditIssueMap;
     private final FPRInfo fprInfo;
     private final FilterSelection filterSelection;
 
     private final TagDefinition analysisTag;
-    private TagDefinition humanAuditTag;
-    private TagDefinition aviatorStatusTag;
     private final SourceLanguageResolver sourceLanguageResolver;
     private final FVDLMetadata fvdlMetadata;
     private final AuditFprOptions options;
     private final Set<String> resultTagIds;
 
     @Builder
-    public IssueAuditor(List<Vulnerability> vulnerabilities, AuditProcessor auditProcessor, Map<String, AuditIssue> auditIssueMap,
+    public IssueAuditor(List<Vulnerability> vulnerabilities, Map<String, AuditIssue> auditIssueMap,
             FPRInfo fprInfo, FilterSelection filterSelection, SourceLanguageResolver sourceLanguageResolver,
-            FVDLMetadata fvdlMetadata, AuditFprOptions options) {
+            FVDLMetadata fvdlMetadata, AuditFprOptions options, TagMappingConfig tagMappingConfig) {
         Objects.requireNonNull(options, "options");
         Objects.requireNonNull(options.getSourceDecoder(), "sourceDecoder");
         this.options = options;
@@ -103,8 +98,6 @@ public class IssueAuditor {
         this.MAX_PER_CATEGORY_EXCEEDED = Constants.MAX_PER_CATEGORY_EXCEEDED;
         this.MAX_TOTAL_EXCEEDED = Constants.MAX_TOTAL_EXCEEDED;
         this.vulnerabilities = vulnerabilities;
-        this.userPrompts = new ArrayList<>();
-        this.auditProcessor = auditProcessor;
         this.auditIssueMap = auditIssueMap;
         this.fprInfo = fprInfo;
         this.filterSelection = filterSelection;
@@ -114,7 +107,7 @@ public class IssueAuditor {
         this.fvdlMetadata = fvdlMetadata;
         this.analysisTag = fprInfo.getFilterTemplate().getTagDefinitions().stream().filter(t -> "Analysis".equalsIgnoreCase(t.getName())).findFirst().orElse(null);
         this.resultsTag = resolveResultTag("", "", analysisTag);
-        this.resultTagIds = resolveResultTagIds();
+        this.resultTagIds = resolveResultTagIds(tagMappingConfig);
     }
 
     private TagDefinition resolveResultTag(String tagName, String tagGuid, TagDefinition analysisTag) {
@@ -134,35 +127,15 @@ public class IssueAuditor {
         return new TagDefinition(tagName, StringUtil.isEmpty(tagGuid) ? UUID.randomUUID().toString() : tagGuid, values, false);
     }
 
-    private TagDefinition resolveAviatorPredictionTag() {
-        String name = "Aviator prediction";
-        String id = "C2D6EC66-CCB3-4FB9-9EE0-0BB02F51008F";
-
-        List<String> values = Arrays.asList(Constants.AVIATOR_NOT_AN_ISSUE, Constants.AVIATOR_REMEDIATION_REQUIRED, Constants.AVIATOR_UNSURE, Constants.AVIATOR_EXCLUDED, Constants.AVIATOR_LIKELY_TP, Constants.AVIATOR_LIKELY_FP);
-        return new TagDefinition(name, id, values, false);
-    }
-
-    private TagDefinition resolveAviatorStatusTag() {
-        String name = "Aviator status";
-        String id = "FB7B0462-2C2E-46D9-811A-DCC1F3C83051";
-
-        List<String> values = List.of(Constants.PROCESSED_BY_AVIATOR);
-        return new TagDefinition(name, id, values, false);
-    }
-
-    private TagDefinition resolveHumanAuditStatus() {
-        String name = "FoD";
-        String id = "604f0fbe-b5fe-47cd-a9cb-587ad8ebe93a";
-
-        List<String> values = Arrays.asList(Constants.PENDING_REVIEW, Constants.FALSE_POSITIVE, Constants.EXPLOITABLE, Constants.SUSPICIOUS, Constants.SANITIZED);
-        return new TagDefinition(name, id, values, false);
-    }
-
     public AuditOutcome performAudit(Map<String, AuditResponse> auditResponses) {
+        return performAudit(preparePrompts(), auditResponses);
+    }
+
+    public AuditOutcome performAudit(List<UserPrompt> preparedPrompts, Map<String, AuditResponse> auditResponses) {
         String projectName = StringUtil.isEmpty(options.getAppVersion()) ? fprInfo.getBuildId() : options.getAppVersion();
         options.getLogger().progress("Starting audit for project: %s", projectName);
 
-        ConcurrentLinkedDeque<UserPrompt> promptsToAudit = prepareAndFilterPrompts();
+        ConcurrentLinkedDeque<UserPrompt> promptsToAudit = new ConcurrentLinkedDeque<>(preparedPrompts);
         int totalIssuesToAudit = promptsToAudit.size();
         options.getLogger().progress("Final count of issues to be audited: %d", totalIssuesToAudit);
 
@@ -207,10 +180,7 @@ public class IssueAuditor {
         return new AuditOutcome(auditResponses, totalIssuesToAudit);
     }
 
-    private ConcurrentLinkedDeque<UserPrompt> prepareAndFilterPrompts() {
-        aviatorStatusTag = resolveAviatorStatusTag();
-        humanAuditTag = resolveHumanAuditStatus();
-
+    public List<UserPrompt> preparePrompts() {
         FilterSet activeFilterSet = filterSelection.getActiveFilterSet();
         List<Vulnerability> filteredVulnerabilities;
 
@@ -231,121 +201,39 @@ public class IssueAuditor {
                 .filter(this::shouldInclude)
                 .collect(Collectors.toList());
 
-        return prompts.stream().collect(Collectors.toCollection(ConcurrentLinkedDeque::new));
+        return prompts;
     }
 
 
     private boolean shouldInclude(UserPrompt userPrompt) {
         AuditIssue auditIssue = auditIssue(userPrompt);
-        if (options.isForceReaudit()) {
-            if (hasHumanTriage(auditIssue)) {
-                LOG.debug("Skipping force re-audit for suppressed or human-triaged issue ID: {}",
-                        userPrompt.getIssueData().getInstanceID());
-                return false;
-            }
-            if (isAviatorWork(auditIssue)) {
-                LOG.debug("Including previously processed Aviator issue for force re-audit: {}",
-                        userPrompt.getIssueData().getInstanceID());
-                return true;
-            }
+        var decision = SastAuditEligibility.evaluate(
+                auditIssue, options.getMode(), resultTagIds, analysisTagIds());
+        if (!decision.eligible()) {
+            LOG.debug("Skipping issue {}: {}", userPrompt.getIssueData().getInstanceID(), decision.reason());
         }
-
-        if (isAudited(userPrompt)) {
-            LOG.debug("Skipping already audited issue ID: {}", userPrompt.getIssueData().getInstanceID());
-            return false;
-        }
-
-        if (humanAuditTag != null && isManuallyAudited(auditIssue)) {
-            LOG.debug("Skipping because already manually audited: {}", userPrompt.getIssueData().getInstanceID());
-            return false;
-        }
-
-        if (aviatorStatusTag != null && isProcessedByAviator(auditIssue)) {
-            LOG.debug("Skipping already processed by Aviator: {}", userPrompt.getIssueData().getInstanceID());
-            return false;
-        }
-
-        return true;
+        return decision.eligible();
     }
 
     private AuditIssue auditIssue(UserPrompt userPrompt) {
         return auditIssueMap.get(userPrompt.getIssueData().getInstanceID());
     }
 
-    private static boolean isManuallyAudited(AuditIssue auditIssue) {
-        if (auditIssue == null || auditIssue.getTags() == null) {
-            return false;
+    private Set<String> analysisTagIds() {
+        Set<String> tagIds = new LinkedHashSet<>(Set.of(Constants.ANALYSIS_TAG_ID));
+        if (analysisTag != null && !StringUtil.isEmpty(analysisTag.getId())) {
+            tagIds.add(analysisTag.getId());
         }
-        return !StringUtil.isPendingReviewValue(auditIssue.getTags().get(Constants.FOD_TAG_ID));
+        return tagIds;
     }
 
-    private boolean isProcessedByAviator(AuditIssue auditIssue) {
-        if (auditIssue == null || auditIssue.getTags() == null) {
-            return false;
-        }
-        String status = auditIssue.getTags().get(Constants.AVIATOR_STATUS_TAG_ID);
-        return !StringUtil.isEmpty(status) && Constants.PROCESSED_BY_AVIATOR.equalsIgnoreCase(status);
-    }
-
-    private boolean hasHumanTriage(AuditIssue auditIssue) {
-        if (auditIssue == null) {
-            return false;
-        }
-        if (auditIssue.isSuppressed()) {
-            return true;
-        }
-        boolean processedByAviator = isProcessedByAviator(auditIssue);
-        for (String tagId : resultTagIds) {
-            if (!isResultTagSet(auditIssue, tagId)) {
-                continue;
-            }
-            String username = lastWriterUsername(auditIssue, tagId);
-            if (Constants.isAviatorAuditUsername(username)) {
-                continue;
-            }
-            if (!StringUtil.isEmpty(username) || Constants.FOD_TAG_ID.equalsIgnoreCase(tagId) || !processedByAviator) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean isAviatorWork(AuditIssue auditIssue) {
-        if (isProcessedByAviator(auditIssue)) {
-            return true;
-        }
-        for (String tagId : resultTagIds) {
-            if (isResultTagSet(auditIssue, tagId) && Constants.isAviatorAuditUsername(lastWriterUsername(auditIssue, tagId))) {
-                return true;
-            }
-        }
-        return false;
-    }
-
-    private boolean isResultTagSet(AuditIssue auditIssue, String tagId) {
-        if (auditIssue == null) {
-            return false;
-        }
-        Map<String, String> tags = auditIssue.getTags();
-        return tags != null && !StringUtil.isPendingReviewValue(tags.get(tagId));
-    }
-
-    private String lastWriterUsername(AuditIssue auditIssue, String tagId) {
-        Map<String, String> lastTagUsernames = auditIssue.getLastTagUsernames();
-        if (lastTagUsernames == null) {
-            return null;
-        }
-        String username = lastTagUsernames.get(tagId);
-        return StringUtil.isEmpty(username) ? null : username;
-    }
-
-    private Set<String> resolveResultTagIds() {
+    private Set<String> resolveResultTagIds(TagMappingConfig tagMappingConfig) {
         Set<String> tagIds = new LinkedHashSet<>(List.of(
                 Constants.ANALYSIS_TAG_ID, Constants.AUDITOR_STATUS_TAG_ID, Constants.FOD_TAG_ID));
         if (analysisTag != null && !StringUtil.isEmpty(analysisTag.getId())) {
             tagIds.add(analysisTag.getId());
         }
-        String mappedTagId = mappedTagId();
+        String mappedTagId = tagMappingConfig == null ? mappedTagId() : tagMappingConfig.getTag_id();
         if (!StringUtil.isEmpty(mappedTagId)) {
             tagIds.add(mappedTagId);
         }
@@ -364,47 +252,6 @@ public class IssueAuditor {
             LOG.debug("Could not read tag mapping file {}", tagMappingPath, e);
             return null;
         }
-    }
-
-    private boolean isAudited(UserPrompt userPrompt) {
-        String issueId = userPrompt.getIssueData().getInstanceID();
-        AuditIssue auditIssue = auditIssueMap.get(issueId);
-
-        if (auditIssue == null) return false;
-
-        Map<String, String> tags = auditIssue.getTags();
-        if (tags == null) return false;
-
-        String auditorStatusTag = Constants.AUDITOR_STATUS_TAG_ID;
-
-        String auditorStatusValue = tags.get(auditorStatusTag);
-        if (!StringUtil.isPendingReviewValue(auditorStatusValue)) {
-            return true;
-        }
-
-        String aviatorExpectedOutcome = Constants.AVIATOR_EXPECTED_OUTCOME_TAG_ID;
-        String analysisTagS = Constants.ANALYSIS_TAG_ID;
-
-        if (auditIssueMap.containsKey(issueId)) {
-            if (auditIssue.isSuppressed()){
-                return true;
-            }
-            if (tags.containsKey(aviatorExpectedOutcome)) {
-                return true;
-            }
-
-            if (analysisTag != null && tags.containsKey(analysisTag.getId())) {
-                String tagValue = tags.get(analysisTag.getId());
-                if (!StringUtil.isPendingReviewValue(tagValue)) {
-                    return true;
-                }
-            }
-
-            if (tags.containsKey(analysisTagS) && !StringUtil.isPendingReviewValue(tags.get(analysisTagS))) {
-                return true;
-            }
-        }
-        return false;
     }
 
     private List<Vulnerability> filterVulnerabilities(List<Vulnerability> allVulnerabilities, FilterSet fs) {

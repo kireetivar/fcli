@@ -17,6 +17,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.slf4j.Logger;
@@ -31,6 +32,7 @@ import com.fortify.cli.aviator._common.session.user.helper.AviatorUserSessionDes
 import com.fortify.cli.aviator.audit.AuditFPR;
 import com.fortify.cli.aviator.audit.model.AuditFprOptions;
 import com.fortify.cli.aviator.audit.model.FPRAuditResult;
+import com.fortify.cli.aviator.audit.model.SastAuditMode;
 import com.fortify.cli.aviator.config.AviatorLoggerImpl;
 import com.fortify.cli.aviator.config.TagMappingConfig;
 import com.fortify.cli.aviator.ssc.helper.AviatorSSCAuditHelper;
@@ -38,6 +40,7 @@ import com.fortify.cli.aviator.ssc.helper.AviatorSSCRefreshHelper;
 import com.fortify.cli.aviator.ssc.helper.AviatorSSCTagValidator;
 import com.fortify.cli.aviator.util.FprHandle;
 import com.fortify.cli.aviator.util.ResourceUtil;
+import com.fortify.cli.common.exception.FcliSimpleException;
 import com.fortify.cli.common.output.cli.mixin.OutputHelperMixins;
 import com.fortify.cli.common.output.transform.IActionCommandResultSupplier;
 import com.fortify.cli.common.progress.cli.mixin.ProgressWriterFactoryMixin;
@@ -75,6 +78,7 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
     @Option(names = {"--test-exceeding-quota"}) private boolean testExceedingQuota;
     @Option(names = {"--default-quota-fallback"}) private boolean defaultQuotaFallback;
     @Option(names = {"--force-reaudit"}) private boolean forceReaudit;
+    @Option(names = {"--include-human-audited"}) private boolean includeHumanAudited;
     @Mixin private SourceEncodingsMixin sourceEncodingsMixin;
     private static final Logger LOG = LoggerFactory.getLogger(AbstractAviatorSSCSastAuditCommand.class);
     private Long checkedQuotaBefore;
@@ -89,6 +93,7 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
     @Override
     @SneakyThrows
     public JsonNode getJsonNode(UnirestInstance unirest) {
+        SastAuditMode auditMode = resolveAuditMode();
         var sessionDescriptor = sessionDescriptorSupplier.getSessionDescriptor();
         Path downloadedFprPath = null;
         try (IProgressWriter progressWriter = progressWriterFactoryMixin.create()) {
@@ -98,18 +103,13 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
             AviatorSSCRefreshHelper.refreshMetricsIfNeeded(
                 unirest, av, refreshOptions.isRefresh(), refreshOptions.getRefreshTimeout(), logger);
 
-                long auditableIssueCount = AviatorSSCAuditHelper.getAuditableIssueCount(
-                    unirest, av, logger, isNoFilterSet(), getFilterSetTitleOrId(), folderNames, forceReaudit);
-            if (auditableIssueCount == 0) {
+            long preliminaryCandidateCount = AviatorSSCAuditHelper.getPreliminaryCandidateCount(
+                    unirest, av, logger, isNoFilterSet(), getFilterSetTitleOrId(), folderNames, auditMode);
+            if (preliminaryCandidateCount == 0 && !isQuotaCheckRequested()) {
                 logger.progress("Audit skipped - no auditable issues found matching the specified filters.");
                 ObjectNode result = AviatorSSCAuditHelper.buildResultNode(av, null, "SKIPPED");
                 AviatorSSCAuditHelper.setOperationMessage(result, "No auditable issues found matching the specified filters");
                 return result;
-            }
-
-            JsonNode quotaResult = checkQuota(unirest, av, sessionDescriptor, auditableIssueCount, logger);
-            if (quotaResult != null) {
-                return quotaResult;
             }
 
             downloadedFprPath = downloadFpr(unirest, av, logger);
@@ -119,7 +119,7 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
                 return result;
             }
 
-            ObjectNode result = (ObjectNode) processFpr(unirest, av, sessionDescriptor.getAviatorToken(), sessionDescriptor.getAviatorUrl(), logger, downloadedFprPath);
+            ObjectNode result = (ObjectNode) processFpr(unirest, av, sessionDescriptor, logger, downloadedFprPath, auditMode);
             if (checkedQuotaBefore != null) {
                 AviatorSSCAuditHelper.setAvailableQuotaBefore(result, checkedQuotaBefore);
             }
@@ -139,6 +139,20 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
         return noFilterSet;
     }
 
+    SastAuditMode resolveAuditMode() {
+        if (includeHumanAudited && !forceReaudit) {
+            throw new FcliSimpleException("--include-human-audited requires --force-reaudit; add --force-reaudit to re-audit human-audited issues");
+        }
+        if (!forceReaudit) {
+            return SastAuditMode.UNAUDITED;
+        }
+        return includeHumanAudited ? SastAuditMode.REAUDIT_AVIATOR_AND_HUMAN : SastAuditMode.REAUDIT_AVIATOR;
+    }
+
+    private boolean isQuotaCheckRequested() {
+        return isSkipIfExceedingQuota() || testExceedingQuota;
+    }
+
     private boolean isSkipIfExceedingQuota() {
         return quotaHandlingArgGroup.skipIfExceedingQuota;
     }
@@ -153,7 +167,7 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
      */
     private JsonNode checkQuota(UnirestInstance unirest, SSCAppVersionDescriptor av,
             AviatorUserSessionDescriptor sessionDescriptor,
-            long auditableIssueCount, AviatorLoggerImpl logger) {
+            long eligibleIssueCount, Map<String, Integer> eligibleCategoryCounts, AviatorLoggerImpl logger) {
         if (!isSkipIfExceedingQuota() && !testExceedingQuota) {
             return null;
         }
@@ -173,22 +187,22 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
             }
         }
 
-        // If auditable issue count is unknown (-1), fail closed when quota protection was requested.
-        if (auditableIssueCount < 0) {
+        // If the prepared count is unknown (-1), fail closed when quota protection was requested.
+        if (eligibleIssueCount < 0) {
             if (isSkipIfExceedingQuota()) {
-                LOG.warn("Auditable issue count unknown; cannot honor --skip-if-exceeding-quota for {}:{}. Audit skipped.",
+                LOG.warn("Eligible issue count unknown; cannot honor --skip-if-exceeding-quota for {}:{}. Audit skipped.",
                     av.getApplicationName(), av.getVersionName());
                 ObjectNode result = AviatorSSCAuditHelper.buildResultNode(av, null, "SKIPPED");
                 AviatorSSCAuditHelper.setOperationMessage(result,
                     "Cannot determine issue count; audit skipped per --skip-if-exceeding-quota");
                 return result;
             }
-            LOG.info("Auditable issue count unknown; skipping quota evaluation for {}:{}.",
+            LOG.info("Eligible issue count unknown; skipping quota evaluation for {}:{}.",
                 av.getApplicationName(), av.getVersionName());
             return null;
         }
 
-        return evaluateQuota(unirest, av, effectiveAppName, auditableIssueCount, availableQuota, logger);
+        return evaluateQuota(av, effectiveAppName, eligibleIssueCount, eligibleCategoryCounts, availableQuota, logger);
     }
 
     /**
@@ -224,8 +238,9 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
      * Evaluates the resolved quota against the auditable issue count and returns
      * a result node if audit should be skipped, or null to proceed with the audit.
      */
-    private JsonNode evaluateQuota(UnirestInstance unirest, SSCAppVersionDescriptor av,
-            String effectiveAppName, long auditableIssueCount, long availableQuota,
+    private JsonNode evaluateQuota(SSCAppVersionDescriptor av,
+            String effectiveAppName, long eligibleIssueCount, Map<String, Integer> eligibleCategoryCounts,
+            long availableQuota,
             AviatorLoggerImpl logger) {
         if (availableQuota == AviatorSSCAuditHelper.QUOTA_UNKNOWN) {
             if (testExceedingQuota) {
@@ -242,23 +257,23 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
                 return result;
             }
             logger.progress("Warning: Could not retrieve quota for '%s', proceeding with audit.", effectiveAppName);
-        } else if (availableQuota >= 0 && auditableIssueCount > availableQuota) {
+        } else if (availableQuota >= 0 && eligibleIssueCount > availableQuota) {
             checkedQuotaBefore = availableQuota;
-            var topCategories = AviatorSSCAuditHelper.getTopUnauditedCategories(unirest, av, logger, 10, forceReaudit);
+            var topCategories = AviatorSSCAuditHelper.getTopEligibleCategories(eligibleCategoryCounts, 10);
             String detailedMessage = AviatorSSCAuditHelper.formatQuotaExceededMessage(
-                av, auditableIssueCount, availableQuota, topCategories);
+                av, eligibleIssueCount, availableQuota, topCategories);
             LOG.info(detailedMessage);
-            logger.progress("Quota exceeded for %s:%s -- Open issues: %d, Available quota: %d. Audit skipped.",
-                av.getApplicationName(), av.getVersionName(), auditableIssueCount, availableQuota);
+            logger.progress("Quota exceeded for %s:%s -- Eligible issues: %d, Available quota: %d. Audit skipped.",
+                av.getApplicationName(), av.getVersionName(), eligibleIssueCount, availableQuota);
             return AviatorSSCAuditHelper.buildQuotaExceededResultNode(
-                av, auditableIssueCount, availableQuota, topCategories);
+                av, eligibleIssueCount, availableQuota, topCategories);
         } else if (testExceedingQuota) {
-            logger.progress("Quota check passed for %s:%s -- Open issues: %d, Available quota: %s",
-                av.getApplicationName(), av.getVersionName(), auditableIssueCount,
+            logger.progress("Quota check passed for %s:%s -- Eligible issues: %d, Available quota: %s",
+                av.getApplicationName(), av.getVersionName(), eligibleIssueCount,
                 availableQuota < 0 ? "unlimited" : String.valueOf(availableQuota));
             ObjectNode result = AviatorSSCAuditHelper.buildResultNode(av, null, "QUOTA_OK");
-            AviatorSSCAuditHelper.setOperationMessage(result, String.format("Quota check passed: %d issues, %s quota available",
-                auditableIssueCount, availableQuota < 0 ? "unlimited" : String.valueOf(availableQuota)));
+            AviatorSSCAuditHelper.setOperationMessage(result, String.format("Quota check passed: %d eligible issues, %s quota available",
+                eligibleIssueCount, availableQuota < 0 ? "unlimited" : String.valueOf(availableQuota)));
             AviatorSSCAuditHelper.setAvailableQuotaBefore(result, availableQuota);
             return result;
         }
@@ -268,12 +283,16 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
     }
 
     @SneakyThrows
-    private JsonNode processFpr(UnirestInstance unirest, SSCAppVersionDescriptor av, String token, String url, AviatorLoggerImpl logger, Path downloadedFprPath) {
+    private JsonNode processFpr(UnirestInstance unirest, SSCAppVersionDescriptor av,
+            AviatorUserSessionDescriptor sessionDescriptor, AviatorLoggerImpl logger,
+            Path downloadedFprPath, SastAuditMode auditMode) {
         FPRAuditResult auditResult;
 
         try (FprHandle fprHandle = new FprHandle(downloadedFprPath)) {
-            auditResult = AuditFPR.auditFPR(AuditFprOptions.builder()
-                    .fprHandle(fprHandle).token(token).url(url)
+            var preparedAudit = AuditFPR.prepareFprAudit(AuditFprOptions.builder()
+                    .fprHandle(fprHandle)
+                    .token(sessionDescriptor.getAviatorToken())
+                    .url(sessionDescriptor.getAviatorUrl())
                     .appVersion(appName)
                     .sscAppName(av.getApplicationName())
                     .sscAppVersion(av.getVersionName())
@@ -283,9 +302,15 @@ abstract class AbstractAviatorSSCSastAuditCommand extends AbstractSSCJsonNodeOut
                     .noFilterSet(isNoFilterSet())
                     .folderNames(folderNames)
                     .folderPriorityOrder(getFolderPriorityOrder())
-                    .forceReaudit(forceReaudit)
+                    .mode(auditMode)
                     .sourceDecoder(sourceEncodingsMixin.getSourceDecoder())
                     .build());
+            JsonNode quotaResult = checkQuota(unirest, av, sessionDescriptor,
+                    preparedAudit.getEligibleIssueCount(), preparedAudit.getEligibleCategoryCounts(), logger);
+            if (quotaResult != null) {
+                    return quotaResult;
+            }
+            auditResult = AuditFPR.executePrepared(preparedAudit);
         } catch (Exception e) {
             LOG.error("FPR audit failed for {}:{}: {}", av.getApplicationName(), av.getVersionName(), e.getMessage(), e);
             ObjectNode result = AviatorSSCAuditHelper.buildResultNode(av, null, "FAILED");

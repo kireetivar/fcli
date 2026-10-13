@@ -17,7 +17,9 @@ import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.TreeMap;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.stream.Collectors;
 
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
@@ -31,6 +33,7 @@ import com.fortify.cli.aviator.audit.model.AuditResponse;
 import com.fortify.cli.aviator.audit.model.FPRAuditResult;
 import com.fortify.cli.aviator.audit.model.FilterSelection;
 import com.fortify.cli.aviator.audit.model.ParsedFprData;
+import com.fortify.cli.aviator.audit.model.UserPrompt;
 import com.fortify.cli.aviator.config.TagMappingConfig;
 import com.fortify.cli.aviator.fpr.FPRProcessor;
 import com.fortify.cli.aviator.fpr.Vulnerability;
@@ -48,7 +51,11 @@ public class AuditFPR {
 
     public static FPRAuditResult auditFPR(AuditFprOptions options)
             throws AviatorSimpleException, AviatorTechnicalException {
+        return executePrepared(prepareFprAudit(options));
+    }
 
+    public static PreparedAudit prepareFprAudit(AuditFprOptions options)
+            throws AviatorSimpleException, AviatorTechnicalException {
         LOG.info("Starting FPR audit process for file: {}", options.getFprHandle().getFprPath());
         options.getFprHandle().validate();
         AviatorConfigManager.getInstance();
@@ -69,15 +76,49 @@ public class AuditFPR {
                 options.getFolderNames()
         );
 
-        // --- STAGE 3: AUDITING ---
-        Map<String, AuditResponse> auditResponses = new ConcurrentHashMap<>();
-        AuditOutcome auditOutcome = performAviatorAudit(parsedData, auditResponses, filterSelection, options);
+        IssueAuditor issueAuditor = createIssueAuditor(parsedData, filterSelection, tagMappingConfig, options);
+        List<UserPrompt> selectedPrompts = issueAuditor.preparePrompts();
+        return new PreparedAudit(parsedData, tagMappingConfig, issueCategoryLookup, issueAuditor, selectedPrompts);
+    }
 
-        // --- STAGE 4: FINALIZATION ---
+    public static FPRAuditResult executePrepared(PreparedAudit preparedAudit)
+            throws AviatorSimpleException, AviatorTechnicalException {
+        Map<String, AuditResponse> auditResponses = new ConcurrentHashMap<>();
+        AuditOutcome auditOutcome = preparedAudit.issueAuditor.performAudit(preparedAudit.selectedPrompts, auditResponses);
+
         return finalizeFprAudit(
-                auditOutcome, auditResponses, parsedData.auditProcessor,
-            tagMappingConfig, issueCategoryLookup, parsedData.fprInfo, parsedData.streamingFVDLProcessor
+                auditOutcome, auditResponses, preparedAudit.parsedData.auditProcessor,
+            preparedAudit.tagMappingConfig, preparedAudit.issueCategoryLookup,
+            preparedAudit.parsedData.fprInfo, preparedAudit.parsedData.streamingFVDLProcessor
         );
+    }
+
+    public static final class PreparedAudit {
+        private final ParsedFprData parsedData;
+        private final TagMappingConfig tagMappingConfig;
+        private final Map<String, String> issueCategoryLookup;
+        private final IssueAuditor issueAuditor;
+        private final List<UserPrompt> selectedPrompts;
+        private final Map<String, Integer> selectedCategoryCounts;
+
+        private PreparedAudit(ParsedFprData parsedData, TagMappingConfig tagMappingConfig,
+                Map<String, String> issueCategoryLookup, IssueAuditor issueAuditor, List<UserPrompt> selectedPrompts) {
+            this.parsedData = parsedData;
+            this.tagMappingConfig = tagMappingConfig;
+            this.issueCategoryLookup = issueCategoryLookup;
+            this.issueAuditor = issueAuditor;
+            this.selectedPrompts = List.copyOf(selectedPrompts);
+            this.selectedCategoryCounts = this.selectedPrompts.stream()
+                    .collect(Collectors.groupingBy(UserPrompt::getCategory, TreeMap::new, Collectors.summingInt(prompt -> 1)));
+        }
+
+        public int getEligibleIssueCount() {
+            return selectedPrompts.size();
+        }
+
+        public Map<String, Integer> getEligibleCategoryCounts() {
+            return Map.copyOf(selectedCategoryCounts);
+        }
     }
 
     private static ParsedFprData prepareAndParseFpr(FprHandle fprHandle, ISourceDecoder sourceDecoder) {
@@ -122,23 +163,22 @@ public class AuditFPR {
         return issueCategoryLookup;
     }
 
-    private static AuditOutcome performAviatorAudit(ParsedFprData parsedData, Map<String, AuditResponse> auditResponsesToFill,
-            FilterSelection filterSelection, AuditFprOptions options) {
+    private static IssueAuditor createIssueAuditor(ParsedFprData parsedData,
+            FilterSelection filterSelection, TagMappingConfig tagMappingConfig, AuditFprOptions options) {
         SourceLanguageResolver sourceLanguageResolver =
             new SourceLanguageResolver(parsedData.streamingFVDLProcessor.getFvdlMetadata());
         parsedData.streamingFVDLProcessor.getFvdlMetadata().clearSourceFileTypeIndexes();
 
-        IssueAuditor issueAuditor = IssueAuditor.builder()
+        return IssueAuditor.builder()
                 .vulnerabilities(parsedData.vulnerabilities)
-                .auditProcessor(parsedData.auditProcessor)
                 .auditIssueMap(parsedData.auditIssueMap)
                 .fprInfo(parsedData.fprInfo)
                 .filterSelection(filterSelection)
                 .sourceLanguageResolver(sourceLanguageResolver)
                 .fvdlMetadata(parsedData.streamingFVDLProcessor.getFvdlMetadata())
+                .tagMappingConfig(tagMappingConfig)
                 .options(options)
                 .build();
-        return issueAuditor.performAudit(auditResponsesToFill);
     }
 
     private static FPRAuditResult finalizeFprAudit(

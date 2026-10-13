@@ -36,6 +36,6 @@ public class AuditFprOptions {
     private final boolean noFilterSet;
     private final List<String> folderNames;
     private final List<String> folderPriorityOrder;
-    @Builder.Default private final boolean forceReaudit = false;
+    @Builder.Default private final SastAuditMode mode = SastAuditMode.UNAUDITED;
     @Builder.Default private final ISourceDecoder sourceDecoder = SourceDecoders.defaults();
 }

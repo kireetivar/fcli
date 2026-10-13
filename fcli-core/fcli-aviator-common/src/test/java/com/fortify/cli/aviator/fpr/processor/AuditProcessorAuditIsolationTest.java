@@ -90,6 +90,24 @@ class AuditProcessorAuditIsolationTest {
     }
 
     @Test
+    void successfulReauditAppendsAviatorHistoryAndPreservesHumanHistory() throws Exception {
+        createTestFpr(auditXmlWithHumanHistory("instance-A"));
+        AuditProcessor auditProcessor = new AuditProcessor(fprHandle);
+        auditProcessor.processAuditXML();
+
+        auditProcessor.updateAndSaveAuditAndRemediationsXml(
+                Map.of("instance-A", successResponse("instance-A")),
+                createTagMappingConfig(),
+                Map.of("instance-A", "Cross-Site Scripting"),
+                new FPRInfo(fprHandle));
+
+        Element audited = readIssueElement("instance-A");
+        assertEquals("Not an Issue", getTagValue(audited, Constants.ANALYSIS_TAG_ID));
+        assertEquals(List.of("analyst.user", Constants.USER_NAME),
+                readTagHistoryUsernames(audited, Constants.ANALYSIS_TAG_ID));
+    }
+
+    @Test
     void doesNotResolveExternalEntityInAuditXml() throws Exception {
         Path secret = Files.createTempFile("audit-xxe-sentinel", ".txt");
         try {
@@ -297,6 +315,36 @@ class AuditProcessorAuditIsolationTest {
         return comments;
     }
 
+    private String getTagValue(Element issueElement, String tagId) {
+        NodeList tags = issueElement.getElementsByTagNameNS(AUDIT_NS, "Tag");
+        for (int i = 0; i < tags.getLength(); i++) {
+            Element tag = (Element) tags.item(i);
+            if (tagId.equalsIgnoreCase(tag.getAttribute("id"))
+                    && tag.getParentNode() == issueElement) {
+                NodeList values = tag.getElementsByTagNameNS(AUDIT_NS, "Value");
+                return values.getLength() == 0 ? null : values.item(0).getTextContent();
+            }
+        }
+        return null;
+    }
+
+    private List<String> readTagHistoryUsernames(Element issueElement, String tagId) {
+        List<String> usernames = new ArrayList<>();
+        NodeList histories = issueElement.getElementsByTagNameNS(AUDIT_NS, "TagHistory");
+        for (int i = 0; i < histories.getLength(); i++) {
+            Element history = (Element) histories.item(i);
+            NodeList tags = history.getElementsByTagNameNS(AUDIT_NS, "Tag");
+            if (tags.getLength() == 0 || !tagId.equalsIgnoreCase(((Element) tags.item(0)).getAttribute("id"))) {
+                continue;
+            }
+            NodeList writers = history.getElementsByTagNameNS(AUDIT_NS, "Username");
+            if (writers.getLength() > 0) {
+                usernames.add(writers.item(0).getTextContent());
+            }
+        }
+        return usernames;
+    }
+
     private boolean hasTagHistory(Element issueElement) {
         return issueElement.getElementsByTagNameNS(AUDIT_NS, "TagHistory").getLength() > 0;
     }
@@ -372,7 +420,24 @@ class AuditProcessorAuditIsolationTest {
                 """.formatted(AUDIT_NS, issues);
     }
 
-    private String auditXmlWithBlankAndNamedIssue(String namedId) {
+        private String auditXmlWithHumanHistory(String instanceId) {
+                return """
+                                <?xml version="1.0" encoding="UTF-8"?>
+                                <ns2:Audit xmlns:ns2="%s" version="4.4">
+                                    <ns2:IssueList>
+                                        <ns2:Issue instanceId="%s" revision="0" suppressed="false">
+                                            <ns2:Tag id="%s"><ns2:Value>Exploitable</ns2:Value></ns2:Tag>
+                                            <ns2:TagHistory>
+                                                <ns2:Tag id="%s"><ns2:Value>Exploitable</ns2:Value></ns2:Tag>
+                                                <ns2:Username>analyst.user</ns2:Username>
+                                            </ns2:TagHistory>
+                                        </ns2:Issue>
+                                    </ns2:IssueList>
+                                </ns2:Audit>
+                                """.formatted(AUDIT_NS, instanceId, Constants.ANALYSIS_TAG_ID, Constants.ANALYSIS_TAG_ID);
+        }
+
+        private String auditXmlWithBlankAndNamedIssue(String namedId) {
         return """
                 <?xml version="1.0" encoding="UTF-8"?>
                 <ns2:Audit xmlns:ns2="%s" version="4.4">

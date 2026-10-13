@@ -27,7 +27,9 @@ import org.junit.jupiter.api.Test;
 
 import com.fasterxml.jackson.databind.node.ObjectNode;
 import com.fortify.cli.aviator.audit.model.FPRAuditResult;
+import com.fortify.cli.aviator.audit.model.SastAuditMode;
 import com.fortify.cli.aviator.ssc.helper.AviatorSSCAuditHelper;
+import com.fortify.cli.common.exception.FcliSimpleException;
 import com.fortify.cli.common.json.JsonHelper;
 
 import picocli.CommandLine;
@@ -90,6 +92,30 @@ class AviatorSSCAuditCommandTest {
         Field field = AbstractAviatorSSCSastAuditCommand.class.getDeclaredField("forceReaudit");
         field.setAccessible(true);
         assertTrue((boolean) field.get(cmd));
+    }
+
+    @Test
+    void bothCommandNamesResolveTheSameReauditModes() {
+        assertEquals(SastAuditMode.UNAUDITED, parse().resolveAuditMode());
+        assertEquals(SastAuditMode.REAUDIT_AVIATOR, parse("--force-reaudit").resolveAuditMode());
+        assertEquals(SastAuditMode.REAUDIT_AVIATOR_AND_HUMAN,
+            parse("--force-reaudit", "--include-human-audited").resolveAuditMode());
+        assertEquals(SastAuditMode.REAUDIT_AVIATOR_AND_HUMAN,
+            parseCanonical("--force-reaudit", "--include-human-audited").resolveAuditMode());
+    }
+
+    @Test
+    void includeHumanAuditedRequiresForceForBothCommandNames() {
+        var legacy = parse("--include-human-audited");
+        var canonical = parseCanonical("--include-human-audited");
+
+        var legacyError = org.junit.jupiter.api.Assertions.assertThrows(
+            FcliSimpleException.class, legacy::resolveAuditMode);
+        var canonicalError = org.junit.jupiter.api.Assertions.assertThrows(
+            FcliSimpleException.class, canonical::resolveAuditMode);
+
+        assertTrue(legacyError.getMessage().contains("requires --force-reaudit"));
+        assertTrue(canonicalError.getMessage().contains("requires --force-reaudit"));
     }
 
     @Test
