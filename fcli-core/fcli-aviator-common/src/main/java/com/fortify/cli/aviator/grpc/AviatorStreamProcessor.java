@@ -786,7 +786,8 @@ class AviatorStreamProcessor implements AutoCloseable {
             } catch (AviatorSimpleException e) {
                 if (wrapper != null) {
                     String instanceId = wrapper.userPrompt.getIssueData().getInstanceID();
-                    logger.errorWithException("Permanently failing request for issue %s due to a client-side error: %s", e, instanceId, e.getMessage());
+                    logger.errorWithException("Permanently failing request for issue %s due to a client-side error: %s",
+                            e, instanceId, e.getMessage());
 
                     AuditResponse failedResponse = new AuditResponse();
                     failedResponse.setIssueId(instanceId);
@@ -933,7 +934,8 @@ class AviatorStreamProcessor implements AutoCloseable {
         wrapperToRetry.attemptCount++;
 
         if (wrapperToRetry.attemptCount > Constants.MAX_RETRIES) {
-            logger.error("Request for instance %s failed after %s retries due to server being busy. Dropping request.", wrapperToRetry.userPrompt.getIssueData().getInstanceID(), Constants.MAX_RETRIES);
+            logger.error("Request for instance %s failed after %s retries due to server being busy. Dropping request.",
+                    wrapperToRetry.userPrompt.getIssueData().getInstanceID(), Constants.MAX_RETRIES);
 
             AuditResponse failedResponse = new AuditResponse();
             failedResponse.setIssueId(wrapperToRetry.userPrompt.getIssueData().getInstanceID());
@@ -946,7 +948,8 @@ class AviatorStreamProcessor implements AutoCloseable {
             logger.progress("Request permanently failed due to server busy - Processed " + completed + " out of " + totalRequests + " issues");
             decrementOutstanding(wrapperToRetry);
             int stillOutstanding = outstandingRequests.get();
-            LOG.debug("Request for instance {} permanently failed. Remaining outstanding requests: {}", wrapperToRetry.userPrompt.getIssueData().getInstanceID(), stillOutstanding);
+            LOG.debug("Request for instance {} permanently failed. Remaining outstanding requests: {}",
+                    wrapperToRetry.userPrompt.getIssueData().getInstanceID(), stillOutstanding);
             if (completed >= totalRequests) {
                 logger.info("All requests accounted for after permanent failure, completing stream.");
                 if (requestHandler != null && !requestHandler.isCompleted()) {
@@ -956,7 +959,9 @@ class AviatorStreamProcessor implements AutoCloseable {
                 streamLatch.countDown();
             }
         } else {
-            LOG.debug("Server is busy for instanceId {}. Re-queueing for retry (Attempt {}/{}). Queue size before re-queue: {}", wrapperToRetry.userPrompt.getIssueData().getInstanceID(), wrapperToRetry.attemptCount, Constants.MAX_RETRIES, processingQueue.size());
+            LOG.debug("Server is busy for instanceId {}. Re-queueing for retry (Attempt {}/{}). Queue size before re-queue: {}",
+                    wrapperToRetry.userPrompt.getIssueData().getInstanceID(), wrapperToRetry.attemptCount,
+                    Constants.MAX_RETRIES, processingQueue.size());
 
             processingQueue.addFirst(wrapperToRetry);
 
@@ -975,7 +980,8 @@ class AviatorStreamProcessor implements AutoCloseable {
 
         boolean sent = sendRequestWithRetry(promptRequest, Constants.MAX_RETRIES);
         if (!sent) {
-            logger.error("Failed to send request for instance %s after all retries. Re-queueing for later attempt.", wrapper.userPrompt.getIssueData().getInstanceID());
+            logger.error("Failed to send request for instance %s after all retries. Re-queueing for later attempt.",
+                    wrapper.userPrompt.getIssueData().getInstanceID());
             inflightRequests.remove(requestId);
             requestMetricsMap.remove(requestId);
             decrementOutstanding(wrapper);
@@ -1044,7 +1050,8 @@ class AviatorStreamProcessor implements AutoCloseable {
                 int newWindow = Math.max(20, currentWindow / 2);
                 serverWindowSize.set(newWindow);
 
-                LOG.debug("Received multiple backpressure warnings. Reducing window to {} and setting backoff to {}x", newWindow, newBackoff);
+                LOG.debug("Received multiple backpressure warnings. Reducing window to {} and setting backoff to {}x",
+                        newWindow, newBackoff);
             }
         } else {
             consecutiveBackpressureViolations.set(1);

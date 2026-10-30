@@ -197,7 +197,8 @@ public final class SastFprCorrelationRecorder {
             String instanceId = entry.getKey();
             if (existingInstanceIds.contains(instanceId)) continue;
             if (issueList == null) {
-                LOG.warn("WARN: writeCorrelationTags: <IssueList> not found in audit.xml; cannot create entry for instanceId='{}'", instanceId);
+                LOG.warn("WARN: writeCorrelationTags: <IssueList> not found in audit.xml; cannot create entry for instanceId='{}'",
+                    instanceId);
                 continue;
             }
 
