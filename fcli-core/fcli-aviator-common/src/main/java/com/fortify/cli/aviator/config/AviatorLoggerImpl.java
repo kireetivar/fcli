@@ -37,6 +37,13 @@ public class AviatorLoggerImpl implements IAviatorLogger {
         logger.info(format, args);
     }
 
+    /**
+     * Formats the message and routes it through {@code progressWriter.writeWarning}, not the
+     * {@code com.fortify.cli.aviator} SLF4J logger. {@code warning()} prefixes the formatted message
+     * with {@code WARN: } when it does not already start with {@code WARN:}, so the prefix appears
+     * once. {@code writeWarning} records the line on the progress writer's logger, which shows the
+     * warning on the console and in the log file.
+     */
     @Override
     public void warn(String format, Object... args) {
         progressWriter.writeWarning(warning(format, args));
