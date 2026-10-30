@@ -137,11 +137,15 @@ public enum ProgressWriterType {
             if (callback != null) {
                 callback.accept(formattedMessage);
             }
-            if (!(this instanceof NoProgressWriter)) {
+            if (drawsProgress()) {
                 ProgressRenderCoordinator.render(this, () -> writeProgress(formattedMessage));
             }
         }
-        
+
+        protected boolean drawsProgress() {
+            return true;
+        }
+
         protected abstract void writeProgress(String message);
 
         @Override
@@ -185,6 +189,11 @@ public enum ProgressWriterType {
         
         @Override
         public boolean isMultiLineSupported() {
+            return false;
+        }
+
+        @Override
+        protected boolean drawsProgress() {
             return false;
         }
         
