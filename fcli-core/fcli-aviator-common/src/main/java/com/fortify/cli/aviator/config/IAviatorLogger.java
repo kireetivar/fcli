@@ -17,4 +17,12 @@ public interface IAviatorLogger {
     void info(String format, Object... args);
     void warn(String format, Object... args);
     void error(String format, Object... args);
+
+    default void warnWithException(String format, Throwable cause, Object... args) {
+        warn(format, args);
+    }
+
+    default void errorWithException(String format, Throwable cause, Object... args) {
+        error(format, args);
+    }
 }
