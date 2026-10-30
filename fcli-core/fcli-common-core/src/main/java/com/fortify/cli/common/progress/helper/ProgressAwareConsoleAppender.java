@@ -17,11 +17,11 @@ import java.nio.charset.StandardCharsets;
 import com.fortify.cli.common.log.LogMaskHelper;
 
 import ch.qos.logback.classic.spi.ILoggingEvent;
-import ch.qos.logback.core.AppenderBase;
+import ch.qos.logback.core.UnsynchronizedAppenderBase;
 import ch.qos.logback.core.encoder.Encoder;
 
 /** Emits each log event after clearing visible progress on the same output lock. */
-public final class ProgressAwareConsoleAppender extends AppenderBase<ILoggingEvent> {
+public final class ProgressAwareConsoleAppender extends UnsynchronizedAppenderBase<ILoggingEvent> {
     private Encoder<ILoggingEvent> encoder;
 
     public void setEncoder(Encoder<ILoggingEvent> encoder) { this.encoder = encoder; }
